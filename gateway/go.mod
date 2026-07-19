@@ -3,7 +3,7 @@ module delegent.dev/gateway
 go 1.25.0
 
 require (
-	delegent.dev/protocol v0.0.0
+	delegent.dev/protocol v0.1.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 )
 
@@ -15,7 +15,3 @@ require (
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 )
-
-// The protocol library lives in ../protocol in the same repo. The gateway module is
-// versioned and released with it; the replace keeps builds hermetic without a go.work.
-replace delegent.dev/protocol => ../protocol

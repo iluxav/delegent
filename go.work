@@ -1,0 +1,9 @@
+// Development workspace: builds and tests inside this repo use the sibling protocol module
+// directly instead of the tagged release the gateway pins in its go.mod. `go install
+// delegent.dev/...@version` from outside is unaffected — workspaces never ship.
+go 1.25.0
+
+use (
+	./protocol
+	./gateway
+)
