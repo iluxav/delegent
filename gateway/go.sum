@@ -1,5 +1,5 @@
-delegent.dev/protocol v0.1.1 h1:B8Nhoc4m/3f1xPyjR6gJl4QX5+8pOCT2bsKAnYbHQk8=
-delegent.dev/protocol v0.1.1/go.mod h1:QepUtsFNZAFjEs3eogdl3vT2EoTcNlX+mhKyKyFoIIU=
+delegent.dev/protocol v0.1.2 h1:e4nTwx+7JtuZP2zCEdITKO+ti1iqIoYSAMl+1M3sAXQ=
+delegent.dev/protocol v0.1.2/go.mod h1:QepUtsFNZAFjEs3eogdl3vT2EoTcNlX+mhKyKyFoIIU=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
