@@ -3,7 +3,7 @@ module delegent.dev/gateway
 go 1.25.0
 
 require (
-	delegent.dev/protocol v0.1.1
+	delegent.dev/protocol v0.1.2
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 )
 
