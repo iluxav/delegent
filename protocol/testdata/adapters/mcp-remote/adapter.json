@@ -1,0 +1,89 @@
+{
+  "vendor": "mcp-remote",
+  "version": "1.0.0",
+  "_comment": "A REMOTE MCP SERVER, doormanned. Every call is the SAME POST to the SAME path — method+path classification is completely blind here. The tool being invoked lives in the BODY (params.name), so the body selector IS the classifier. This adapter is the argument for body-aware classification: without it, MCP is unpoliceable.",
+
+  "_comment_annotations": "MCP tools self-declare readOnlyHint / destructiveHint / idempotentHint. DO NOT classify from those. They are asserted by the very server you are constraining — a malicious server declaring readOnlyHint:true on exfiltrate_everything walks straight through. Use them to GENERATE a draft of this file for a human to review and sign. The vendor publishes the interface; it does not publish danger.",
+
+  "base_url": "https://mcp.example.com",
+
+  "classify": [
+    { "_": "=== HANDSHAKE / DISCOVERY — free, but not unclassified. ===" },
+
+    { "id": "mcp.initialize",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "initialize" } },
+      "effect": "read", "scopes": ["mcp:connect"] },
+
+    { "id": "mcp.ping",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "ping" } },
+      "effect": "read", "scopes": ["mcp:connect"] },
+
+    { "id": "mcp.tools.list",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/list" } },
+      "effect": "read", "scopes": ["mcp:connect"],
+      "_note": "Listing tools is harmless. Note the server may ADD tools at runtime (notifications/tools/list_changed) — any tool not classified below hits the default and is DENIED until a human classifies it. That property matters far more here than on a REST API: GitHub ships endpoints quarterly, an MCP server can ship one mid-conversation." },
+
+    { "id": "mcp.resources.list",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "resources/list" } },
+      "effect": "read", "scopes": ["mcp:connect"] },
+
+    { "_": "=== READS ===" },
+
+    { "id": "mcp.resources.read",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "resources/read" } },
+      "effect": "read", "scopes": ["files:read"] },
+
+    { "id": "tool.search_files",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/call", "params.name": "search_files" } },
+      "effect": "read", "scopes": ["files:read"] },
+
+    { "id": "tool.read_file",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/call", "params.name": "read_file" } },
+      "effect": "read", "scopes": ["files:read"] },
+
+    { "_": "=== WRITES ===" },
+
+    { "id": "tool.write_file",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/call", "params.name": "write_file" } },
+      "effect": "write", "scopes": ["files:write"] },
+
+    { "_": "=== EXTERNAL — reaches other humans. ===" },
+
+    { "id": "tool.send_email",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/call", "params.name": "send_email" } },
+      "effect": "external", "scopes": ["mail:send"],
+      "_note": "You cannot unsend it. Irreversible socially, not technically — a different axis from destructive, which is exactly why effects are a set." },
+
+    { "_": "=== DESTRUCTIVE ===" },
+
+    { "id": "tool.delete_file",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/call", "params.name": "delete_file" } },
+      "effect": "destructive", "scopes": ["files:write"] },
+
+    { "_": "=== SPENDS ===" },
+
+    { "id": "tool.purchase",
+      "match": { "method": "POST", "path": "/mcp", "body": { "method": "tools/call", "params.name": "purchase" } },
+      "effect": "spends", "scopes": ["billing:spend"], "meters": ["amount"] },
+
+    { "_": "=== THE REVERSE CHANNEL — server → client, over SSE. ===",
+      "__": "MCP is bidirectional. The SERVER can send requests to the CLIENT: sampling/createMessage asks your agent's LLM to generate text and hands the result back to the server; elicitation/create renders a dialog to YOUR HUMAN. That is a data-exfiltration and model-hijack channel pointing the wrong way through the proxy, and no amount of request-side authorization touches it. It is classified here so it can be DENIED BY DEFAULT: no slip that omits these scopes lets a remote server drive your model or prompt your user." },
+
+    { "id": "server.sampling",
+      "match": { "method": "SSE", "path": "/mcp", "body": { "method": "sampling/createMessage" } },
+      "effect": "external", "scopes": ["mcp:sampling"],
+      "_note": "The server asks OUR model to generate. Almost no agent should ever grant this." },
+
+    { "id": "server.elicitation",
+      "match": { "method": "SSE", "path": "/mcp", "body": { "method": "elicitation/create" } },
+      "effect": "external", "scopes": ["mcp:elicit"],
+      "_note": "The server renders a dialog to OUR human — a consent prompt on a channel the vendor controls." },
+
+    { "id": "server.roots",
+      "match": { "method": "SSE", "path": "/mcp", "body": { "method": "roots/list" } },
+      "effect": "read", "scopes": ["mcp:roots"],
+      "_note": "The server asks which filesystems we expose. Reconnaissance." }
+  ],
+
+  "default": { "effect": "unknown" }
+}

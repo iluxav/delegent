@@ -1,0 +1,50 @@
+{
+  "vendor": "mcp-remote",
+  "display_name": "Remote MCP server",
+  "levels": {
+    "read": { "label": "Read only", "effects": ["read"], "scopes": ["mcp:connect", "files:read"], "risk": "low" },
+    "contribute": {
+      "label": "Read + write files",
+      "effects": ["read", "write"],
+      "scopes": ["mcp:connect", "files:read", "files:write"],
+      "risk": "medium",
+      "warnings": ["Can create and overwrite files. CANNOT delete them — 'destructive' is not in this grant."]
+    },
+    "full": {
+      "label": "Everything",
+      "effects": ["read", "write", "destructive", "spends", "external"],
+      "scopes": ["*"],
+      "risk": "critical",
+      "warnings": ["Can delete files, send email, and spend money."]
+    }
+  },
+  "scopes": {
+    "mcp:connect": { "human": "Connect and list what the server offers", "risk": "low" },
+    "files:read": { "human": "Read files through this server", "risk": "low" },
+    "files:write": { "human": "Create, modify and delete files", "risk": "medium", "warnings": ["Deleting requires the 'destructive' effect as well — this scope alone cannot delete."] },
+    "mail:send": { "human": "Send email", "risk": "high", "warnings": ["You cannot unsend an email. Every send reaches a real human."] },
+    "billing:spend": { "human": "Spend money", "risk": "high" },
+    "mcp:sampling": {
+      "human": "Let this server run prompts through YOUR model",
+      "risk": "critical",
+      "warnings": [
+        "⚠️ This lets a REMOTE SERVER drive your agent's LLM and read the output.",
+        "It is a data-exfiltration channel that points backwards through the proxy.",
+        "Almost no task requires it. Deny by default."
+      ]
+    },
+    "mcp:elicit": {
+      "human": "Let this server show dialogs to you",
+      "risk": "critical",
+      "warnings": ["⚠️ A consent prompt rendered by the vendor you are trying to constrain. Anything it shows you is attacker-controlled text."]
+    },
+    "mcp:roots": { "human": "Let this server ask which filesystems you expose", "risk": "medium" }
+  },
+  "intent_hints": {
+    "summari|read|review|analy|search|list": ["mcp:connect", "files:read"],
+    "write|save|create|update": ["mcp:connect", "files:read", "files:write"],
+    "email|notify|send": ["mcp:connect", "mail:send"],
+    "delete|remove|purge": ["mcp:connect", "files:write"],
+    "buy|purchase|pay": ["mcp:connect", "billing:spend"]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "vendor": "mcp-remote",
+  "note": "Alice deliberately holds NO mcp:sampling and NO mcp:elicit. A remote server asking to drive her model or prompt her directly is asking for authority she does not have — and no consent dialog can conjure it.",
+  "principals": {
+    "root:alice": ["mcp:connect", "files:read", "files:write", "mail:send", "billing:spend"]
+  }
+}
