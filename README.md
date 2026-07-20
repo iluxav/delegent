@@ -18,7 +18,7 @@ approval channels, the curated adapter registry — runs this same engine.
 ## Quick start
 
 ```sh
-go install delegent.dev/gateway/cmd/delegent-gateway@latest
+curl -fsSL https://delegent.dev/install.sh | sh    # or: go install delegent.dev/gateway/cmd/delegent-gateway@latest
 delegent-gateway init
 delegent-gateway target add --id github --endpoint https://your-mcp.example/mcp --credential <token>
 delegent-gateway key mint --name laptop

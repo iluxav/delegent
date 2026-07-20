@@ -1,0 +1,61 @@
+# Builds and publishes release binaries when a gateway tag is pushed (the two binaries
+# version together — one release ships both). workflow_dispatch allows re-releasing an
+# existing tag (e.g. a tag pushed before this workflow existed).
+name: release
+
+on:
+  push:
+    tags: ["gateway/v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "gateway tag to release (e.g. gateway/v0.1.2)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+
+      - name: Build binaries (darwin/linux × amd64/arm64)
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#gateway/}"
+          mkdir -p dist
+          for osarch in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            export GOOS="${osarch%/*}" GOARCH="${osarch#*/}" CGO_ENABLED=0
+            out="dist/${GOOS}_${GOARCH}"
+            mkdir -p "$out"
+            (cd gateway  && go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "../$out/delegent-gateway" ./cmd/delegent-gateway)
+            (cd protocol && go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "../$out/delegent" ./cmd/delegent)
+            tar -C "$out" -czf "dist/delegent_${VERSION}_${GOOS}_${GOARCH}.tar.gz" delegent-gateway delegent
+          done
+          (cd dist && sha256sum ./*.tar.gz > checksums.txt && cat checksums.txt)
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NOTES="delegent + delegent-gateway ${TAG#gateway/}
+
+          Install:
+          \`\`\`sh
+          curl -fsSL https://delegent.dev/install.sh | sh
+          \`\`\`
+          Or with Go: \`go install delegent.dev/gateway/cmd/delegent-gateway@latest\`"
+          gh release create "$TAG" dist/*.tar.gz dist/checksums.txt \
+            --title "$TAG" --notes "$NOTES" --latest \
+          || gh release upload "$TAG" dist/*.tar.gz dist/checksums.txt --clobber

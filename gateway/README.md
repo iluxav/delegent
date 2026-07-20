@@ -12,6 +12,13 @@ capability slips, the authorization algebra, receipt hash chains — lives in th
 ## Install
 
 ```sh
+curl -fsSL https://delegent.dev/install.sh | sh
+```
+
+Installs prebuilt `delegent-gateway` + `delegent` binaries (macOS/Linux, amd64/arm64,
+checksum-verified). Or build from source:
+
+```sh
 go install delegent.dev/gateway/cmd/delegent-gateway@latest
 ```
 
