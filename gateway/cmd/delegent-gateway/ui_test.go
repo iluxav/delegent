@@ -20,6 +20,7 @@ type fakeOps struct {
 	resolveOK    bool
 	disabledSet  [][]string
 	mintedNames  []string
+	channelSets  []string
 	rolledIDs    []string
 	consents     consentBundle
 	streamCh     chan gateway.ConsentEvent
@@ -61,6 +62,10 @@ func (f *fakeOps) MintKey(_ context.Context, name string) (keyRow, string, error
 	return keyRow{ID: "akey_new", Name: name}, "dgk_plaintext", nil
 }
 func (f *fakeOps) RevokeKey(context.Context, string) error { return nil }
+func (f *fakeOps) SetKeyChannels(_ context.Context, id string, channels []string) error {
+	f.channelSets = append(f.channelSets, id+"="+strings.Join(channels, ","))
+	return nil
+}
 func (f *fakeOps) RollKey(_ context.Context, id string) (keyRow, string, error) {
 	f.rolledIDs = append(f.rolledIDs, id)
 	return keyRow{ID: "akey_next", Name: "laptop"}, "dgk_rolled", nil
@@ -101,7 +106,7 @@ func drain(t *testing.T, s screen, cmd tea.Cmd) screen {
 	// tick/blink messages would loop forever; only feed our own msg types back
 	switch msg.(type) {
 	case targetsLoadedMsg, targetDetailMsg, policySavedMsg, entUpdatedMsg, introspectedMsg,
-		keysLoadedMsg, keyMintedMsg, eventsLoadedMsg, consentsLoadedMsg, resolvedMsg, flashMsg, errMsg:
+		keysLoadedMsg, keyMintedMsg, keyChannelsSavedMsg, eventsLoadedMsg, consentsLoadedMsg, resolvedMsg, flashMsg, errMsg:
 		var next tea.Cmd
 		s, next = s.update(msg)
 		return drain(t, s, next)
@@ -204,6 +209,41 @@ func TestKeysScreen_MintAndRoll(t *testing.T) {
 	}
 	if s.(*keysScreen).plaintext != "dgk_rolled" {
 		t.Fatal("roll must show the fresh plaintext once")
+	}
+}
+
+func TestKeysScreen_ConsentPreset(t *testing.T) {
+	f := &fakeOps{}
+	var s screen = newKeysScreen(f)
+	s = drain(t, s, s.init())
+	s = press(t, s, "c") // open preset picker on akey_1
+	if !s.(*keysScreen).picking {
+		t.Fatal("picker must open")
+	}
+	s = press(t, s, "down", "down", "enter") // pick "in-chat first"
+	if len(f.channelSets) != 1 || f.channelSets[0] != "akey_1=elicitation,console" {
+		t.Fatalf("channelSets = %v", f.channelSets)
+	}
+}
+
+func TestTargetsScreen_ScopeEffectCycle(t *testing.T) {
+	f := &fakeOps{}
+	var s screen = newTargetsScreen(f)
+	s = drain(t, s, s.init())
+	s = press(t, s, "enter", "right") // detail → entitlement pane
+	s = press(t, s, "e")              // files:read (row 0): read → write on its tools
+	ts := s.(*targetsScreen)
+	if ts.tools[0].Effect != "write" || !ts.dirty {
+		t.Fatalf("scope effect cycle failed: %+v dirty=%v", ts.tools[0], ts.dirty)
+	}
+	view := s.view(140, 40)
+	if !strings.Contains(view, "write") || !strings.Contains(view, "[unsaved]") {
+		t.Fatalf("entitlement pane must show the new effect + unsaved flag:\n%s", view)
+	}
+	// mcp:connect (last row) has no tools — cycling must refuse gracefully
+	s = press(t, s, "down", "down", "e")
+	if s.(*targetsScreen).tools[0].Effect != "write" {
+		t.Fatal("cycling a tool-less scope must not touch other tools")
 	}
 }
 

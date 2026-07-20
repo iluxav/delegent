@@ -238,18 +238,22 @@ func (s *targetsScreen) updatePolicyPane(msg tea.KeyMsg) (screen, tea.Cmd) {
 			return s, textinput.Blink
 		}
 	case "s": // save
-		if s.dirty {
-			id, tools := s.detail.Target.ID, append([]provision.ToolSpec(nil), s.tools...)
-			return s, func() tea.Msg {
-				if err := s.o.PutPolicy(context.Background(), id, "", tools); err != nil {
-					return errMsg{err}
-				}
-				return policySavedMsg{}
-			}
-		}
-		return s, flash("nothing to save")
+		return s.savePolicy()
 	}
 	return s, nil
+}
+
+func (s *targetsScreen) savePolicy() (screen, tea.Cmd) {
+	if !s.dirty {
+		return s, flash("nothing to save")
+	}
+	id, tools := s.detail.Target.ID, append([]provision.ToolSpec(nil), s.tools...)
+	return s, func() tea.Msg {
+		if err := s.o.PutPolicy(context.Background(), id, "", tools); err != nil {
+			return errMsg{err}
+		}
+		return policySavedMsg{}
+	}
 }
 
 func (s *targetsScreen) updateScopeEdit(msg tea.KeyMsg) (screen, tea.Cmd) {
@@ -281,6 +285,15 @@ func (s *targetsScreen) updateScopesPane(msg tea.KeyMsg) (screen, tea.Cmd) {
 		if s.scopeCur < len(s.scopeRows)-1 {
 			s.scopeCur++
 		}
+	case "e": // scope-centric bulk effect cycle across the scope's tools
+		if len(s.scopeRows) > 0 {
+			if !s.cycleScopeEffect(s.scopeRows[s.scopeCur].scope) {
+				return s, flash("no classified tools behind this scope")
+			}
+		}
+		return s, nil
+	case "s":
+		return s.savePolicy()
 	case " ": // toggle opt-out and persist immediately
 		if len(s.scopeRows) == 0 {
 			return s, nil
@@ -302,6 +315,44 @@ func (s *targetsScreen) updateScopesPane(msg tea.KeyMsg) (screen, tea.Cmd) {
 		}
 	}
 	return s, nil
+}
+
+// scopeEffect returns the strongest effect among working tools requiring scope ("" = no tools).
+func (s *targetsScreen) scopeEffect(scope string) string {
+	eff := ""
+	for _, tl := range s.tools {
+		if tl.Scope == scope && !provision.IsUnknown(tl.Effect) && provision.Rank(tl.Effect) > provision.Rank(eff) {
+			eff = tl.Effect
+		}
+	}
+	return eff
+}
+
+// cycleScopeEffect steps EVERY tool requiring scope to the next effect after the current
+// dominant one — the scope-centric bulk edit. Marks the policy dirty; 's' saves.
+func (s *targetsScreen) cycleScopeEffect(scope string) bool {
+	cur := s.scopeEffect(scope)
+	if cur == "" {
+		return false // no classified tools behind this scope (e.g. mcp:connect)
+	}
+	next := effectCycle[0]
+	for i, eff := range effectCycle {
+		if eff == cur {
+			next = effectCycle[(i+1)%len(effectCycle)]
+			break
+		}
+	}
+	changed := false
+	for i := range s.tools {
+		if s.tools[i].Scope == scope {
+			s.tools[i].Effect = next
+			changed = true
+		}
+	}
+	if changed {
+		s.dirty = true
+	}
+	return changed
 }
 
 func (s *targetsScreen) rebuildScopeRows() {
@@ -333,7 +384,7 @@ func (s *targetsScreen) hints() string {
 	case s.inDetail && s.pane == 0:
 		return "↑↓ tool · e effect · enter scope · u refuse · I re-introspect · s save · ←→ scopes pane · esc back"
 	case s.inDetail:
-		return "↑↓ scope · space opt-in/out · ←→ policy pane · esc back"
+		return "↑↓ scope · space opt-in/out · e cycle tools' effect · s save · ←→ policy pane · esc back"
 	default:
 		return "↑↓ select · enter open · e enable/disable · r reload"
 	}
@@ -371,7 +422,7 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 	}
 	b.WriteString(title + "\n\n")
 
-	paneNames := []string{"Tool policy", "Scopes"}
+	paneNames := []string{"Tool policy", "Operator entitlement"}
 	for i, n := range paneNames {
 		if i == s.pane {
 			b.WriteString(styTabActive.Render(n))
@@ -402,6 +453,7 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 			b.WriteString(line + "\n")
 		}
 	} else {
+		b.WriteString(styDim.Render("  the operator's entitlement on this target — what grants may draw from") + "\n\n")
 		for i, r := range s.scopeRows {
 			box := "[x]"
 			note := ""
@@ -409,7 +461,11 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 				box = "[ ]"
 				note = styDim.Render("  (opted out)")
 			}
-			line := fmt.Sprintf("  %s %-24s %s %s%s", box, r.scope, riskStyle(r.risk).Render(fmt.Sprintf("%-7s", r.risk)), styDim.Render(truncate(r.human, 44)), note)
+			eff := s.scopeEffect(r.scope)
+			if eff == "" {
+				eff = "—"
+			}
+			line := fmt.Sprintf("  %s %-24s %-12s %s %s%s", box, r.scope, eff, riskStyle(r.risk).Render(fmt.Sprintf("%-7s", r.risk)), styDim.Render(truncate(r.human, 38)), note)
 			if i == s.scopeCur {
 				line = styCursor.Render(line)
 			}

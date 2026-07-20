@@ -20,12 +20,16 @@ type keysScreen struct {
 
 	confirm string // "", "revoke", "roll" — pending y/n
 
+	picking bool // consent-channel preset picker open for rows[cursor]
+	pickIdx int
+
 	// plaintext box: shown once after mint/roll, explicit dismissal required
 	plaintext string
 	plainName string
 }
 
 type keysLoadedMsg struct{ rows []keyRow }
+type keyChannelsSavedMsg struct{ name, label string }
 type keyMintedMsg struct {
 	row       keyRow
 	plaintext string
@@ -40,7 +44,31 @@ func newKeysScreen(o ops) *keysScreen {
 	return &keysScreen{o: o, nameInput: ti}
 }
 
-func (s *keysScreen) capturing() bool { return s.naming || s.confirm != "" || s.plaintext != "" }
+func (s *keysScreen) capturing() bool {
+	return s.naming || s.confirm != "" || s.plaintext != "" || s.picking
+}
+
+// consentPresets mirrors the hosted console's one-click policies: an ordered channel list,
+// console always the implicit final fallback. A hand-rolled list reads as "custom".
+var consentPresets = []struct {
+	label    string
+	channels []string
+}{
+	{"auto", nil},
+	{"console only", []string{"console"}},
+	{"in-chat first", []string{"elicitation", "console"}},
+	{"widget first", []string{"widget", "console"}},
+}
+
+func presetLabel(channels []string) string {
+	joined := strings.Join(channels, ",")
+	for _, pz := range consentPresets {
+		if strings.Join(pz.channels, ",") == joined {
+			return pz.label
+		}
+	}
+	return "custom: " + joined
+}
 
 func (s *keysScreen) init() tea.Cmd { return s.load() }
 
@@ -62,6 +90,9 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 			s.cursor = 0
 		}
 		return s, nil
+
+	case keyChannelsSavedMsg:
+		return s, tea.Batch(flash(msg.name+" consent: "+msg.label), s.load())
 
 	case keyMintedMsg:
 		s.plaintext = msg.plaintext
@@ -86,6 +117,9 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 		if s.confirm != "" {
 			return s.updateConfirm(msg)
 		}
+		if s.picking {
+			return s.updatePicking(msg)
+		}
 		switch msg.String() {
 		case "up", "k":
 			if s.cursor > 0 {
@@ -109,6 +143,17 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 		case "R":
 			if s.active() != nil {
 				s.confirm = "roll"
+			}
+		case "c":
+			if s.active() != nil {
+				s.picking = true
+				s.pickIdx = 0
+				cur := strings.Join(s.rows[s.cursor].ConsentChannels, ",")
+				for i, pz := range consentPresets {
+					if strings.Join(pz.channels, ",") == cur {
+						s.pickIdx = i
+					}
+				}
 			}
 		}
 	}
@@ -151,6 +196,33 @@ func (s *keysScreen) updateNaming(msg tea.KeyMsg) (screen, tea.Cmd) {
 	return s, cmd
 }
 
+func (s *keysScreen) updatePicking(msg tea.KeyMsg) (screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		s.picking = false
+	case "up", "k":
+		if s.pickIdx > 0 {
+			s.pickIdx--
+		}
+	case "down", "j":
+		if s.pickIdx < len(consentPresets)-1 {
+			s.pickIdx++
+		}
+	case "enter":
+		s.picking = false
+		k := s.rows[s.cursor]
+		channels := consentPresets[s.pickIdx].channels
+		label := consentPresets[s.pickIdx].label
+		return s, func() tea.Msg {
+			if err := s.o.SetKeyChannels(context.Background(), k.ID, channels); err != nil {
+				return errMsg{err}
+			}
+			return keyChannelsSavedMsg{name: k.Name, label: label}
+		}
+	}
+	return s, nil
+}
+
 func (s *keysScreen) updateConfirm(msg tea.KeyMsg) (screen, tea.Cmd) {
 	verb := s.confirm
 	switch msg.String() {
@@ -186,9 +258,19 @@ func (s *keysScreen) hints() string {
 		return "enter mint · esc cancel"
 	case s.confirm != "":
 		return "y confirm " + s.confirm + " · any other key cancels"
+	case s.picking:
+		return "↑↓ preset · enter set · esc cancel"
 	default:
-		return "↑↓ select · n new · R roll · x revoke · r reload"
+		return "↑↓ select · n new · R roll · x revoke · c consent · r reload"
 	}
+}
+
+// presetHint explains a preset's channel order; console is always the final fallback.
+func presetHint(channels []string) string {
+	if len(channels) == 0 {
+		return "client's best channel: in-chat dialog, widget, or parked approvals"
+	}
+	return strings.Join(channels, " → ") + " (console always the final fallback)"
 }
 
 func (s *keysScreen) view(width, height int) string {
@@ -207,7 +289,7 @@ func (s *keysScreen) view(width, height int) string {
 		b.WriteString(styDim.Render("\n  no agent keys — press n to mint one"))
 		return b.String()
 	}
-	b.WriteString(styBold.Render(fmt.Sprintf("  %-24s %-10s %-12s %-9s %s", "ID", "PREFIX", "NAME", "STATE", "LAST USED")) + "\n")
+	b.WriteString(styBold.Render(fmt.Sprintf("  %-24s %-10s %-12s %-9s %-16s %s", "ID", "PREFIX", "NAME", "STATE", "CONSENT", "LAST USED")) + "\n")
 	for i, k := range s.rows {
 		state := styStatusOK.Render("active   ")
 		if k.RevokedAt != 0 {
@@ -217,11 +299,24 @@ func (s *keysScreen) view(width, height int) string {
 		if k.LastUsedAt != 0 {
 			last = time.UnixMilli(k.LastUsedAt).Format("Jan 02 15:04")
 		}
-		line := fmt.Sprintf("  %-24s %-10s %-12s %-9s %s", k.ID, k.Prefix+"…", truncate(k.Name, 12), state, last)
+		line := fmt.Sprintf("  %-24s %-10s %-12s %-9s %-16s %s", k.ID, k.Prefix+"…", truncate(k.Name, 12), state, truncate(presetLabel(k.ConsentChannels), 16), last)
 		if i == s.cursor {
 			line = styCursor.Render(line)
 		}
 		b.WriteString(line + "\n")
+		if s.picking && i == s.cursor {
+			for j, pz := range consentPresets {
+				mark := "  "
+				if j == s.pickIdx {
+					mark = "▸ "
+				}
+				row := fmt.Sprintf("      %s%-14s %s", mark, pz.label, styDim.Render(presetHint(pz.channels)))
+				if j == s.pickIdx {
+					row = styCursor.Render(row)
+				}
+				b.WriteString(row + "\n")
+			}
+		}
 	}
 	return b.String()
 }

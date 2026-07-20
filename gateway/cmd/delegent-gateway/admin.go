@@ -6,9 +6,11 @@ package main
 // uses — so the TUI and the console can never disagree about what an edit means.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -204,13 +206,47 @@ func (a *adminEnv) putEntitlement(w http.ResponseWriter, r *http.Request) {
 			disabled = append(disabled, sc)
 		}
 	}
+	before := ent.Disabled
 	ent.Disabled = disabled
 	if err := a.e.st.PutEntitlement(ctx, ent); err != nil {
 		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	emitScopeToggleEvents(ctx, a.e.st, a.e.operator, targetID, before, disabled)
 	a.reg.Invalidate(targetID)
 	adminJSON(w, http.StatusOK, entitlementView{Scopes: ent.Scopes, Disabled: ent.Disabled, Effective: ent.Effective()})
+}
+
+// emitScopeToggleEvents records one activity-log event per changed opt-out — the same
+// scope_enabled/scope_disabled rows the hosted console writes, so the audit trail reads
+// identically wherever the toggle happened. Best-effort: a log failure never fails the toggle.
+func emitScopeToggleEvents(ctx context.Context, st store.Store, userID, targetID string, before, after []string) {
+	was := map[string]bool{}
+	for _, sc := range before {
+		was[sc] = true
+	}
+	now := map[string]bool{}
+	for _, sc := range after {
+		now[sc] = true
+	}
+	emit := func(evType, scope string) {
+		if err := st.AppendEvent(ctx, &store.Event{
+			ID: id.New("evt"), CreatedAt: nowMillis(), Type: evType, UserID: userID, TargetID: targetID,
+			Scopes: []string{scope}, Decision: "operator", Reason: "operator toggled " + scope,
+		}); err != nil {
+			log.Printf("dashboard: activity-log append failed (%s): %v", evType, err)
+		}
+	}
+	for sc := range now {
+		if !was[sc] {
+			emit("scope_disabled", sc)
+		}
+	}
+	for sc := range was {
+		if !now[sc] {
+			emit("scope_enabled", sc)
+		}
+	}
 }
 
 // --- keys ---
@@ -222,6 +258,42 @@ type keyRow struct {
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at"`
 	RevokedAt  int64  `json:"revoked_at"`
+	// ConsentChannels is the key's ordered consent-channel policy (empty = auto); the gateway
+	// always falls back to the console after the list.
+	ConsentChannels []string `json:"consent_channels,omitempty"`
+}
+
+// knownConsentChannels is the closed set a key policy may name — the same set the hosted
+// console enforces.
+var knownConsentChannels = map[string]bool{"elicitation": true, "widget": true, "console": true}
+
+func validateChannels(channels []string) error {
+	for _, c := range channels {
+		if !knownConsentChannels[c] {
+			return fmt.Errorf("unknown consent channel %q (want elicitation|widget|console)", c)
+		}
+	}
+	return nil
+}
+
+// setKeyChannels replaces the key's consent-channel policy (empty = auto).
+func (a *adminEnv) setKeyChannels(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConsentChannels []string `json:"consent_channels"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	if err := validateChannels(req.ConsentChannels); err != nil {
+		adminJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := a.e.st.SetAgentKeyConsentChannels(r.Context(), r.PathValue("id"), req.ConsentChannels); err != nil {
+		a.notFoundOrErr(w, err)
+		return
+	}
+	adminJSON(w, http.StatusOK, map[string]any{"consent_channels": req.ConsentChannels})
 }
 
 func (a *adminEnv) listKeys(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +304,8 @@ func (a *adminEnv) listKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	rows := make([]keyRow, 0, len(keys))
 	for _, k := range keys {
-		rows = append(rows, keyRow{ID: k.ID, Prefix: k.Prefix, Name: k.Name, CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt})
+		rows = append(rows, keyRow{ID: k.ID, Prefix: k.Prefix, Name: k.Name, CreatedAt: k.CreatedAt,
+			LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt, ConsentChannels: k.ConsentChannels})
 	}
 	adminJSON(w, http.StatusOK, rows)
 }

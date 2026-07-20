@@ -155,6 +155,29 @@ func runOpsSuite(t *testing.T, o ops) {
 		t.Fatal(err)
 	}
 
+	// consent-channel policy roundtrip + validation
+	if err := o.SetKeyChannels(ctx, rolled.ID, []string{"elicitation", "console"}); err != nil {
+		t.Fatalf("SetKeyChannels: %v", err)
+	}
+	keys, _ = o.ListKeys(ctx)
+	for _, k := range keys {
+		if k.ID == rolled.ID && strings.Join(k.ConsentChannels, ",") != "elicitation,console" {
+			t.Fatalf("channels not persisted: %v", k.ConsentChannels)
+		}
+	}
+	if err := o.SetKeyChannels(ctx, rolled.ID, []string{"smoke-signal"}); err == nil {
+		t.Fatal("unknown channel must be refused")
+	}
+	if err := o.SetKeyChannels(ctx, rolled.ID, nil); err != nil {
+		t.Fatalf("clearing to auto: %v", err)
+	}
+
+	// the scope toggle above must have written console-parity audit rows
+	togEvents, err := o.ListEvents(ctx, store.EventFilter{Type: "scope_disabled"})
+	if err != nil || len(togEvents) == 0 {
+		t.Fatalf("scope_disabled audit event missing: %v %v", togEvents, err)
+	}
+
 	// events
 	events, err := o.ListEvents(ctx, store.EventFilter{KeyName: "ci"})
 	if err != nil || len(events) != 1 || events[0].Tool != "read_file" {

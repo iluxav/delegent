@@ -179,6 +179,7 @@ func mountAdmin(mux *http.ServeMux, e *env, reg *gateway.Registry, tgm *telegram
 	mux.Handle("GET /admin/keys", guard(a.listKeys))
 	mux.Handle("POST /admin/keys", guard(a.mintKey))
 	mux.Handle("POST /admin/keys/{id}/revoke", guard(a.revokeKey))
+	mux.Handle("PUT /admin/keys/{id}/channels", guard(a.setKeyChannels))
 	mux.Handle("POST /admin/keys/{id}/roll", guard(a.rollKey))
 	mux.Handle("GET /admin/events", guard(a.listEvents))
 	mux.Handle("GET /admin/health", guard(a.health))

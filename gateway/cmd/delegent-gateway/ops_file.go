@@ -122,10 +122,12 @@ func (f *fileOps) SetDisabled(ctx context.Context, targetID string, disabled []s
 			clamped = append(clamped, sc)
 		}
 	}
+	before := ent.Disabled
 	ent.Disabled = clamped
 	if err := f.e.st.PutEntitlement(ctx, ent); err != nil {
 		return nil, err
 	}
+	emitScopeToggleEvents(ctx, f.e.st, f.e.operator, targetID, before, clamped)
 	return &entitlementView{Scopes: ent.Scopes, Disabled: ent.Disabled, Effective: ent.Effective()}, nil
 }
 
@@ -136,9 +138,17 @@ func (f *fileOps) ListKeys(ctx context.Context) ([]keyRow, error) {
 	}
 	rows := make([]keyRow, 0, len(keys))
 	for _, k := range keys {
-		rows = append(rows, keyRow{ID: k.ID, Prefix: k.Prefix, Name: k.Name, CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt})
+		rows = append(rows, keyRow{ID: k.ID, Prefix: k.Prefix, Name: k.Name, CreatedAt: k.CreatedAt,
+			LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt, ConsentChannels: k.ConsentChannels})
 	}
 	return rows, nil
+}
+
+func (f *fileOps) SetKeyChannels(ctx context.Context, keyID string, channels []string) error {
+	if err := validateChannels(channels); err != nil {
+		return err
+	}
+	return f.e.st.SetAgentKeyConsentChannels(ctx, keyID, channels)
 }
 
 func (f *fileOps) MintKey(ctx context.Context, name string) (keyRow, string, error) {

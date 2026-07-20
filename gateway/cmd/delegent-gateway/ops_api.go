@@ -119,6 +119,13 @@ type keyMintResp struct {
 	Plaintext string `json:"plaintext"`
 }
 
+func (a *apiOps) SetKeyChannels(ctx context.Context, id string, channels []string) error {
+	if channels == nil {
+		channels = []string{}
+	}
+	return a.do(ctx, http.MethodPut, "/admin/keys/"+url.PathEscape(id)+"/channels", map[string][]string{"consent_channels": channels}, nil)
+}
+
 func (a *apiOps) MintKey(ctx context.Context, name string) (keyRow, string, error) {
 	var out keyMintResp
 	if err := a.do(ctx, http.MethodPost, "/admin/keys", map[string]string{"name": name}, &out); err != nil {

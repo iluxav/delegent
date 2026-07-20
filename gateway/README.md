@@ -77,10 +77,12 @@ A terminal dashboard over everything above — four tabs:
 
 - **Targets** — drill into a target to edit its tool policy (cycle effects, edit scopes,
   mark tools refused, `I` re-introspects the upstream and drafts newly appeared tools) and
-  to opt scopes in/out per target (an opt-out withholds the scope from every grant without
-  deleting it). Edits apply LIVE to a running gateway — no restart.
-- **Keys** — mint, revoke, and **roll** (`R`: a fresh key under the same name, old one
-  revoked; plaintext shown exactly once).
+  to manage the operator entitlement per target: opt scopes in/out (an opt-out withholds the
+  scope from every grant without deleting it) and `e` bulk-cycles the effect of every tool
+  behind the selected scope. Edits apply LIVE to a running gateway — no restart.
+- **Keys** — mint, revoke, **roll** (`R`: a fresh key under the same name, old one
+  revoked; plaintext shown exactly once), and `c` sets the key's consent-channel policy
+  (auto / console only / in-chat first / widget first — same presets as the hosted console).
 - **Audit** — the activity log, filterable, with live tail.
 - **Alerts** — pending consent asks as they happen (badge + terminal bell from any tab):
   approve with a per-scope picker + TTL/budget, or deny.

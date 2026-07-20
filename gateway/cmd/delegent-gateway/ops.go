@@ -37,6 +37,8 @@ type ops interface {
 	SetDisabled(ctx context.Context, targetID string, disabled []string) (*entitlementView, error)
 
 	ListKeys(ctx context.Context) ([]keyRow, error)
+	// SetKeyChannels replaces a key's ordered consent-channel policy (empty = auto).
+	SetKeyChannels(ctx context.Context, id string, channels []string) error
 	MintKey(ctx context.Context, name string) (keyRow, string, error)
 	RevokeKey(ctx context.Context, id string) error
 	RollKey(ctx context.Context, id string) (keyRow, string, error)
