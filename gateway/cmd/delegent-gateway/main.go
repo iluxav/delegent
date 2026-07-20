@@ -27,6 +27,7 @@ commands:
   init                         create the home dir, master key, operator identity
   serve                        serve the gateway over HTTP (/mcp + /admin)
   stdio                        serve the gateway over stdin/stdout (MCP stdio transport)
+  dashboard                    terminal dashboard: policy, scopes, keys, audit, live approvals
   target add|list|enable|disable   manage fronted MCP targets
   key mint|list|revoke         manage agent keys
   approvals [approve|deny]     list / resolve pending consent asks (talks to a running serve)
@@ -50,6 +51,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "stdio":
 		err = cmdStdio(os.Args[2:])
+	case "dashboard":
+		err = cmdDashboard(os.Args[2:])
 	case "target":
 		err = cmdTarget(os.Args[2:])
 	case "key":

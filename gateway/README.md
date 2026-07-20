@@ -67,6 +67,29 @@ This is a **single-operator** deployment: one human (or ops team) owns the insta
 keys, and receives every consent ask. Multi-operator routing, dashboards, and hosted
 approval channels are the hosted product.
 
+## Dashboard
+
+```sh
+delegent-gateway dashboard
+```
+
+A terminal dashboard over everything above — four tabs:
+
+- **Targets** — drill into a target to edit its tool policy (cycle effects, edit scopes,
+  mark tools refused, `I` re-introspects the upstream and drafts newly appeared tools) and
+  to opt scopes in/out per target (an opt-out withholds the scope from every grant without
+  deleting it). Edits apply LIVE to a running gateway — no restart.
+- **Keys** — mint, revoke, and **roll** (`R`: a fresh key under the same name, old one
+  revoked; plaintext shown exactly once).
+- **Audit** — the activity log, filterable, with live tail.
+- **Alerts** — pending consent asks as they happen (badge + terminal bell from any tab):
+  approve with a per-scope picker + TTL/budget, or deny.
+
+The dashboard finds a running gateway automatically — `serve` and `stdio` both register a
+loopback admin address under `~/.delegent/run/` — and drives it over the admin API, so live
+consent alerts work even when your only gateway is the stdio process Claude launched. With
+nothing running it falls back to editing the files directly and says so in the status line.
+
 ## Approvals
 
 Consent asks resolve through the first channel that works, console-of-last-resort:

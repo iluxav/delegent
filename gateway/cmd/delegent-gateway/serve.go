@@ -8,9 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"delegent.dev/gateway"
 	"delegent.dev/gateway/agentkey"
@@ -29,7 +32,8 @@ func cmdServe(args []string) error {
 		return err
 	}
 	log.SetOutput(os.Stderr)
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	e, err := requireOperator(ctx, *home)
 	if err != nil {
@@ -57,9 +61,24 @@ func cmdServe(args []string) error {
 	mux.HandleFunc("/mcp/{$}", registry.ServeAggregate)
 	mountAdmin(mux, e, registry, tgm)
 
+	cleanup, err := writeRunfile(e.home, e.cfg.ListenAddr, "serve")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	srv := &http.Server{Addr: e.cfg.ListenAddr, Handler: mux}
+	go func() {
+		<-ctx.Done()
+		cleanup()
+		_ = srv.Close()
+	}()
 	log.Printf("[delegent-gateway] build %s | operator %s | up — http://%s/mcp (agents) and /admin (CLI)",
 		version, e.operator, e.cfg.ListenAddr)
-	return http.ListenAndServe(e.cfg.ListenAddr, mux)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // cmdStdio serves the identical aggregate surface over stdin/stdout — the transport MCP
@@ -76,7 +95,8 @@ func cmdStdio(args []string) error {
 		return err
 	}
 	log.SetOutput(os.Stderr)
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	e, err := requireOperator(ctx, *home)
 	if err != nil {
@@ -100,17 +120,36 @@ func cmdStdio(args []string) error {
 	}
 
 	registry := gateway.NewRegistry(e.st, e.sealer)
+	tgm := telegram.NewManager(telegram.ManagerOptions{
+		Store: e.st, Secrets: secretstore.NewDB(e.st, e.sealer), Resolver: registry, ConsoleURL: e.cfg.ConsoleURL,
+	})
+	registry.SetNotifier(tgm)
+	// The poller runs only on request: another process (serve, or a second stdio instance)
+	// may already be polling the bot token, and telegram allows one poller per token.
 	if *withTelegram {
-		tgm := telegram.NewManager(telegram.ManagerOptions{
-			Store: e.st, Secrets: secretstore.NewDB(e.st, e.sealer), Resolver: registry, ConsoleURL: e.cfg.ConsoleURL,
-		})
-		registry.SetNotifier(tgm)
 		if err := tgm.Reload(ctx); err != nil {
 			log.Printf("⚠️ telegram channel reload failed: %v", err)
 		}
 	}
 
-	log.Printf("[delegent-gateway] stdio up — operator %s", user)
+	// The admin surface rides a loopback listener on an EPHEMERAL port (no clashes when
+	// several MCP clients each launch their own stdio gateway) and registers a runfile so
+	// the dashboard can discover this instance. stdout belongs to MCP; admin is HTTP-only.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	adminMux := http.NewServeMux()
+	mountAdmin(adminMux, e, registry, tgm)
+	go func() { _ = http.Serve(ln, adminMux) }()
+	cleanup, err := writeRunfile(e.home, ln.Addr().String(), "stdio")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	defer ln.Close()
+
+	log.Printf("[delegent-gateway] stdio up — operator %s | admin http://%s", user, ln.Addr())
 	return registry.ServeStdio(ctx, user)
 }
 
@@ -127,8 +166,27 @@ func mountAdmin(mux *http.ServeMux, e *env, reg *gateway.Registry, tgm *telegram
 	guard := func(h http.HandlerFunc) http.Handler { return a.auth(h) }
 	mux.Handle("GET /admin/consents", guard(a.listConsents))
 	mux.Handle("POST /admin/consents/{id}", guard(a.resolveConsent))
+	mux.Handle("GET /admin/consents/stream", guard(a.streamConsents))
 	mux.Handle("POST /admin/telegram", guard(a.telegramSetup))
 	mux.Handle("POST /admin/telegram/link", guard(a.telegramLink))
+	// dashboard surface (admin.go)
+	mux.Handle("GET /admin/targets", guard(a.listTargets))
+	mux.Handle("GET /admin/targets/{id}", guard(a.getTargetDetail))
+	mux.Handle("PUT /admin/targets/{id}/policy", guard(a.putTargetPolicy))
+	mux.Handle("PUT /admin/targets/{id}/enabled", guard(a.setTargetEnabled))
+	mux.Handle("POST /admin/targets/{id}/introspect", guard(a.introspectTarget))
+	mux.Handle("PUT /admin/entitlements/{target}", guard(a.putEntitlement))
+	mux.Handle("GET /admin/keys", guard(a.listKeys))
+	mux.Handle("POST /admin/keys", guard(a.mintKey))
+	mux.Handle("POST /admin/keys/{id}/revoke", guard(a.revokeKey))
+	mux.Handle("POST /admin/keys/{id}/roll", guard(a.rollKey))
+	mux.Handle("GET /admin/events", guard(a.listEvents))
+	mux.Handle("GET /admin/health", guard(a.health))
+}
+
+// health answers the dashboard's discovery ping with who/what this process is.
+func (a *adminEnv) health(w http.ResponseWriter, r *http.Request) {
+	adminJSON(w, http.StatusOK, map[string]any{"ok": true, "operator": a.e.operator, "version": version, "pid": os.Getpid()})
 }
 
 func (a *adminEnv) auth(next http.HandlerFunc) http.Handler {
