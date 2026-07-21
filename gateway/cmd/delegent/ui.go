@@ -187,6 +187,9 @@ func (r *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ev.Type == "pending" {
 			r.pendingAlerts++
 			cmds = append(cmds, bell())
+			if r.active != 3 { // not on Alerts: tell the operator how to act, not just that
+				cmds = append(cmds, flash("🔔 approval requested — Tab to Alerts, then a approve / d deny"))
+			}
 		} else if r.pendingAlerts > 0 {
 			r.pendingAlerts--
 		}

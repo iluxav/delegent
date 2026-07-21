@@ -212,6 +212,11 @@ func (s *alertsScreen) view(width, height int) string {
 	var b strings.Builder
 	if len(s.rows) == 0 {
 		b.WriteString(styDim.Render("\n  no pending approvals"))
+	} else if !s.deciding {
+		b.WriteString(styBold.Render("  ↑↓ select   a approve   d deny") +
+			styDim.Render("   — the agent is waiting on you; denials and approvals land instantly") + "\n\n")
+	} else {
+		b.WriteString(styBold.Render("  approve: space toggles a scope · t TTL · b budget · enter confirm · esc back") + "\n\n")
 	}
 	for i, row := range s.rows {
 		kind := styStatusOff.Render("LIVE  ")
@@ -226,7 +231,11 @@ func (s *alertsScreen) view(width, height int) string {
 			}
 			head = strings.Join(scopes, " ")
 		}
-		line := fmt.Sprintf("  %-14s %s %-12s %-12s %s", row.id, kind, truncate(row.agent, 12), truncate(row.target, 12), head)
+		marker := "  "
+		if i == s.cursor {
+			marker = "▸ "
+		}
+		line := fmt.Sprintf("%s%-14s %s %-12s %-12s %s", marker, row.id, kind, truncate(row.agent, 12), truncate(row.target, 12), head)
 		if i == s.cursor {
 			line = styCursor.Render(line)
 		}

@@ -290,6 +290,55 @@ func TestAuditScreen_Filter(t *testing.T) {
 	}
 }
 
+func TestAlertsScreen_ActionBarVisible(t *testing.T) {
+	f := &fakeOps{resolveOK: true}
+	f.consents = consentBundle{Live: []gateway.PendingView{{ID: "creq_1", TargetID: "gh",
+		Scopes: []gateway.ScopeView{{Scope: "files:read"}}}}}
+	var s screen = newAlertsScreen(f, true)
+	s = drain(t, s, s.init())
+	view := s.view(140, 40)
+	if !strings.Contains(view, "a approve") || !strings.Contains(view, "d deny") || !strings.Contains(view, "▸") {
+		t.Fatalf("alerts panel must show its keys and the selection marker:\n%s", view)
+	}
+	s = press(t, s, "a")
+	if got := s.view(140, 40); !strings.Contains(got, "space toggles a scope") {
+		t.Fatalf("picker must show its keys:\n%s", got)
+	}
+}
+
+func TestRoot_NewAskFlashesInstructions(t *testing.T) {
+	f := &fakeOps{streamCh: make(chan gateway.ConsentEvent, 1)}
+	r := newRootModel(f)
+	r.stream = f.streamCh
+	r.active = 0 // on Targets when the ask arrives
+	m, cmd := r.Update(consentStreamMsg{ev: gateway.ConsentEvent{Type: "pending", ID: "creq_9"}})
+	root := m.(*rootModel)
+	_ = cmd
+	// drain the batch for the flashMsg
+	found := false
+	var walk func(c tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil || found {
+			return
+		}
+		msg := c()
+		if b, ok := msg.(tea.BatchMsg); ok {
+			for _, cc := range b {
+				walk(cc)
+			}
+			return
+		}
+		if fm, ok := msg.(flashMsg); ok && strings.Contains(fm.text, "Tab to Alerts") {
+			found = true
+		}
+	}
+	walk(cmd)
+	if !found {
+		t.Fatal("a new ask while on another tab must flash how to act on it")
+	}
+	_ = root
+}
+
 func TestRoot_StreamBumpsBadgeAndBell(t *testing.T) {
 	f := &fakeOps{streamCh: make(chan gateway.ConsentEvent, 1)}
 	r := newRootModel(f)
