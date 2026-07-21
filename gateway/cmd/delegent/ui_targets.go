@@ -431,6 +431,22 @@ func (s *targetsScreen) view(width, height int) string {
 	return "\n" + s.tbl.View()
 }
 
+// window returns the [start,end) slice bounds that keep cursor visible in a viewport of
+// size visible, biased to keep the cursor centered while clamping at the edges.
+func window(cursor, total, visible int) (int, int) {
+	if visible >= total || visible <= 0 {
+		return 0, total
+	}
+	start := cursor - visible/2
+	if start < 0 {
+		start = 0
+	}
+	if start+visible > total {
+		start = total - visible
+	}
+	return start, start + visible
+}
+
 func (s *targetsScreen) viewDetail(width, height int) string {
 	d := s.detail
 	var b strings.Builder
@@ -452,7 +468,18 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 
 	if s.pane == 0 {
 		b.WriteString("  " + styHead.Render(padCell("TOOL", 28)+" "+padCell("EFFECT", 12)+" "+"SCOPE") + "\n")
+		visible := height - 8 // title, pane row, header, scroll indicators, padding
+		if visible < 5 {
+			visible = 5
+		}
+		start, end := window(s.toolCursor, len(s.tools), visible)
+		if start > 0 {
+			b.WriteString(styDim.Render(fmt.Sprintf("  ↑ %d more above", start)) + "\n")
+		}
 		for i, t := range s.tools {
+			if i < start || i >= end {
+				continue
+			}
 			eff, effSty := t.Effect, styDim
 			if provision.IsUnknown(eff) {
 				eff, effSty = "unknown→deny", styErr
@@ -471,9 +498,23 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 			}
 			b.WriteString("  " + line + "\n")
 		}
+		if end < len(s.tools) {
+			b.WriteString(styDim.Render(fmt.Sprintf("  ↓ %d more below", len(s.tools)-end)) + "\n")
+		}
 	} else {
 		b.WriteString(styDim.Render("  the operator's entitlement on this target — what grants may draw from") + "\n\n")
+		visible := height - 9
+		if visible < 5 {
+			visible = 5
+		}
+		start, end := window(s.scopeCur, len(s.scopeRows), visible)
+		if start > 0 {
+			b.WriteString(styDim.Render(fmt.Sprintf("  ↑ %d more above", start)) + "\n")
+		}
 		for i, r := range s.scopeRows {
+			if i < start || i >= end {
+				continue
+			}
 			box := "[x]"
 			note := ""
 			if r.disabled {
@@ -491,7 +532,10 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 			}
 			b.WriteString("  " + line + "\n")
 		}
-		b.WriteString("\n" + styDim.Render("  effective: "+strings.Join(s.detail.Entitlement.Effective, " ")) + "\n")
+		if end < len(s.scopeRows) {
+			b.WriteString(styDim.Render(fmt.Sprintf("  ↓ %d more below", len(s.scopeRows)-end)) + "\n")
+		}
+		b.WriteString("\n" + styDim.Render("  effective: "+truncate(strings.Join(s.detail.Entitlement.Effective, " "), width-14)) + "\n")
 	}
 	return b.String()
 }

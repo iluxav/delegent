@@ -33,7 +33,7 @@ type alertsScreen struct {
 
 	rows    []alertRow
 	cursor  int
-	history []string // short strip of recent resolutions
+	history []histEntry // recent resolutions, newest last
 
 	deciding  bool // approval picker open for rows[cursor]
 	scopeCur  int
@@ -46,6 +46,14 @@ type resolvedMsg struct {
 	id      string
 	approve bool
 	ok      bool
+	note    string // what the ask was about, for the recent-decisions list
+}
+
+type histEntry struct {
+	id       string
+	approved bool
+	stale    bool // resolution landed on nothing (expired / agent gone)
+	note     string
 }
 
 func newAlertsScreen(o ops, live bool) *alertsScreen {
@@ -106,15 +114,14 @@ func (s *alertsScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 		if msg.approve {
 			verb = "approved"
 		}
-		if !msg.ok {
-			s.history = append(s.history, msg.id+" — no live ask (expired or agent gave up)")
-			return s, tea.Batch(flash("no live ask held that id"), s.load(), refreshAlertCount(s.o))
-		}
-		s.history = append(s.history, msg.id+" "+verb)
+		s.history = append(s.history, histEntry{id: msg.id, approved: msg.approve, stale: !msg.ok, note: msg.note})
 		if len(s.history) > 5 {
 			s.history = s.history[len(s.history)-5:]
 		}
-		return s, tea.Batch(flash(msg.id+" "+verb), s.load(), refreshAlertCount(s.o))
+		if !msg.ok {
+			return s, tea.Batch(flash("no live ask held that id"), s.load(), refreshAlertCount(s.o))
+		}
+		return s, tea.Batch(flash(shortID(msg.id)+" "+verb), s.load(), refreshAlertCount(s.o))
 
 	case tea.KeyMsg:
 		if s.deciding {
@@ -194,12 +201,20 @@ func (s *alertsScreen) updateDeciding(msg tea.KeyMsg) (screen, tea.Cmd) {
 func (s *alertsScreen) resolve(row alertRow, approve bool, granted []string) tea.Cmd {
 	ttl := ttlPresets[s.ttlIdx]
 	budget := budgetPresets[s.budgetIdx]
+	note := row.headline
+	if note == "" {
+		var scopes []string
+		for _, sc := range row.scopes {
+			scopes = append(scopes, sc.scope)
+		}
+		note = row.target + ": " + strings.Join(scopes, ", ")
+	}
 	return func() tea.Msg {
 		ok, err := s.o.Resolve(context.Background(), row.id, approve, granted, ttl, budget)
 		if err != nil {
 			return errMsg{err}
 		}
-		return resolvedMsg{id: row.id, approve: approve, ok: ok}
+		return resolvedMsg{id: row.id, approve: approve, ok: ok, note: note}
 	}
 }
 
@@ -226,9 +241,7 @@ func (s *alertsScreen) view(width, height int) string {
 	var b strings.Builder
 	if len(s.rows) == 0 {
 		b.WriteString("\n" + styDim.Render("  no pending approvals — new asks appear here the moment an agent needs you") + "\n")
-		if len(s.history) > 0 {
-			b.WriteString("\n" + styDim.Render("  recent: "+strings.Join(s.history, " · ")) + "\n")
-		}
+		b.WriteString(s.viewHistory(width))
 		return b.String()
 	}
 
@@ -300,8 +313,32 @@ func (s *alertsScreen) view(width, height int) string {
 			}
 		}
 	}
-	if len(s.history) > 0 {
-		b.WriteString(styDim.Render("  recent: "+strings.Join(s.history, " · ")) + "\n")
+	b.WriteString(s.viewHistory(width))
+	return b.String()
+}
+
+// viewHistory renders the recent decisions as a list, newest first — one line per decision:
+// verdict, short id, and what the ask was about.
+func (s *alertsScreen) viewHistory(width int) string {
+	if len(s.history) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n  " + styHead.Render("recent decisions") + "\n")
+	for i := len(s.history) - 1; i >= 0; i-- {
+		h := s.history[i]
+		verdict := styStatusOK.Render("✓ approved")
+		switch {
+		case h.stale:
+			verdict = styDim.Render("· no-op    ")
+		case !h.approved:
+			verdict = styErr.Render("✗ denied  ")
+		}
+		note := h.note
+		if h.stale {
+			note += "  (expired or the agent had already gone)"
+		}
+		b.WriteString("  " + verdict + " " + styBold.Render(shortID(h.id)) + "  " + styDim.Render(truncate(note, width-30)) + "\n")
 	}
 	return b.String()
 }
