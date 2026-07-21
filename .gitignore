@@ -1,4 +1,4 @@
 # local build artifacts — release binaries come from CI, never the repo
-gateway/delegent-gateway
-protocol/delegent
+gateway/delegent
+protocol/delegent-proto
 dist/

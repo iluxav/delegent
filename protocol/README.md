@@ -39,27 +39,27 @@ Key entry points: `SignSlip`, `Narrow`, `Fold`, `VerifyChain`, `Authorize`, `Cla
 
 ## CLI
 
-`cmd/delegent` is the protocol in a terminal — the same operations, file-shaped:
+`cmd/delegent-proto` is the protocol in a terminal — the same operations, file-shaped:
 
 ```sh
-go install delegent.dev/protocol/cmd/delegent@latest
+go install delegent.dev/protocol/cmd/delegent-proto@latest
 
-delegent keygen                                  # {"pub": …, "priv": …}
-delegent mint --priv K --iss root:alice --aud AGENT_PUB \
+delegent-proto keygen                                  # {"pub": …, "priv": …}
+delegent-proto mint --priv K --iss root:alice --aud AGENT_PUB \
   --vendor github --scopes repos:read,repos:write --effects read,write \
   --ceiling repos:admin --methods GET,POST --resources '/repos/*' \
   --budget 10 --ttl-minutes 60 --depth 2 > chain.json
-delegent attenuate --chain chain.json --priv AGENT_PRIV \
+delegent-proto attenuate --chain chain.json --priv AGENT_PRIV \
   --aud REMOTE_PUB --scopes repos:read --ceiling repos:read --budget 2 > child.json
-delegent inspect --chain child.json              # per-link view + folded limits
-delegent verify --chain child.json --root root:alice=ROOT_PUB \
+delegent-proto inspect --chain child.json              # per-link view + folded limits
+delegent-proto verify --chain child.json --root root:alice=ROOT_PUB \
   --priv REMOTE_PRIV                             # full verify (proof-of-possession)
-delegent verify --chain child.json --root root:alice=ROOT_PUB
+delegent-proto verify --chain child.json --root root:alice=ROOT_PUB
                                                  # structural verify (auditor's view)
-delegent hash-receipts --receipts raw.json --priv ROOT_PRIV > signed.json
+delegent-proto hash-receipts --receipts raw.json --priv ROOT_PRIV > signed.json
                                                  # chain + SIGN receipts (omit --priv to
                                                  # hash only; stale sigs are stripped loudly)
-delegent verify-receipts --receipts signed.json --pub ROOT_PUB
+delegent-proto verify-receipts --receipts signed.json --pub ROOT_PUB
 ```
 
 Exit code 0 = verified; non-zero = refused, with the specific reason on stderr — the reasons

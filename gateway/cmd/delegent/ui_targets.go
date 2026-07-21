@@ -395,7 +395,7 @@ func (s *targetsScreen) view(width, height int) string {
 		return s.viewDetail(width, height)
 	}
 	if len(s.rows) == 0 {
-		return styDim.Render("\n  no targets — add one with 'delegent-gateway target add'")
+		return styDim.Render("\n  no targets — add one with 'delegent target add'")
 	}
 	var b strings.Builder
 	b.WriteString(styBold.Render(fmt.Sprintf("  %-16s %-9s %-6s %-14s %s", "TARGET", "STATE", "TOOLS", "CREDENTIAL", "ENDPOINT")) + "\n")

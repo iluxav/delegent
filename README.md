@@ -9,8 +9,8 @@ This repository is the open implementation, in two Go modules:
 
 | module | what it is |
 |---|---|
-| [`delegent.dev/protocol`](protocol/) | The math: capability slips, the attenuation/verification algebra, receipt hash chains. **Zero dependencies** (stdlib only) — any party can verify a chain or an audit trail with this package and a public key. Ships the `delegent` CLI. |
-| [`delegent.dev/gateway`](gateway/) | The runnable product: a single-binary, single-operator MCP gateway (stdio + HTTP) with JSON-file state, sealed secrets, consent via elicitation / Telegram / CLI, and per-principal signed receipts. Ships the `delegent-gateway` binary. |
+| [`delegent.dev/protocol`](protocol/) | The math: capability slips, the attenuation/verification algebra, receipt hash chains. **Zero dependencies** (stdlib only) — any party can verify a chain or an audit trail with this package and a public key. Ships the `delegent-proto` CLI. |
+| [`delegent.dev/gateway`](gateway/) | The runnable product: a single-binary, single-operator MCP gateway (stdio + HTTP) with JSON-file state, sealed secrets, consent via elicitation / Telegram / CLI, and per-principal signed receipts. Ships the `delegent` binary. |
 
 The hosted platform at [delegent.dev](https://delegent.dev) — teams, dashboards, hosted
 approval channels, the curated adapter registry — runs this same engine.
@@ -18,21 +18,21 @@ approval channels, the curated adapter registry — runs this same engine.
 ## Quick start
 
 ```sh
-curl -fsSL https://delegent.dev/install.sh | sh    # or: go install delegent.dev/gateway/cmd/delegent-gateway@latest
-delegent-gateway init
-delegent-gateway target add --id github --endpoint https://your-mcp.example/mcp --credential <token>
-delegent-gateway key mint --name laptop
+curl -fsSL https://delegent.dev/install.sh | sh    # or: go install delegent.dev/gateway/cmd/delegent@latest
+delegent init
+delegent target add --id github --endpoint https://your-mcp.example/mcp --credential <token>
+delegent key mint --name laptop
 ```
 
-Point your MCP client (Claude Code, Claude Desktop, Cursor, …) at `delegent-gateway stdio`
+Point your MCP client (Claude Code, Claude Desktop, Cursor, …) at `delegent stdio`
 and every vendor tool arrives consent-gated. Full walkthrough, HTTP/Docker deployment, and
 the approvals flow: [gateway/README.md](gateway/README.md).
 
 Verify a receipt trail offline — no gateway, no trust in this repo's binaries required:
 
 ```sh
-go install delegent.dev/protocol/cmd/delegent@latest
-delegent verify-receipts --receipts receipts.jsonl --pub <operator pubkey>
+go install delegent.dev/protocol/cmd/delegent-proto@latest
+delegent-proto verify-receipts --receipts receipts.jsonl --pub <operator pubkey>
 ```
 
 ## Why the split

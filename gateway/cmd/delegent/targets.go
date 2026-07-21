@@ -15,7 +15,7 @@ import (
 
 func cmdTarget(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: delegent-gateway target add|list|enable|disable [flags]")
+		return errors.New("usage: delegent target add|list|enable|disable [flags]")
 	}
 	switch args[0] {
 	case "add":
@@ -101,7 +101,7 @@ func targetList(args []string) error {
 		return err
 	}
 	if len(ts) == 0 {
-		fmt.Println("no targets — add one with 'delegent-gateway target add'")
+		fmt.Println("no targets — add one with 'delegent target add'")
 		return nil
 	}
 	for _, t := range ts {
@@ -132,7 +132,7 @@ func targetSetEnabled(args []string, enabled bool) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: delegent-gateway target %s <id>", verb)
+		return fmt.Errorf("usage: delegent target %s <id>", verb)
 	}
 	ctx := context.Background()
 	e, err := openEnv(ctx, *home)

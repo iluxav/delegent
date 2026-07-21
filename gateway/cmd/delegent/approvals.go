@@ -31,7 +31,7 @@ func adminCall(e *env, method, path string, body, out any) error {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return fmt.Errorf("cannot reach the gateway at %s — is 'delegent-gateway serve' running? (%v)", e.cfg.ListenAddr, err)
+		return fmt.Errorf("cannot reach the gateway at %s — is 'delegent serve' running? (%v)", e.cfg.ListenAddr, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 400 {
@@ -102,7 +102,7 @@ func approvalsList(args []string) error {
 		}
 		fmt.Printf("%-14s parked   %-12s %s — %s\n", p.ID, p.AgentName, p.TargetID, line)
 	}
-	fmt.Println("\nresolve with: delegent-gateway approvals approve|deny <id> [--scopes a,b] [--ttl 60]")
+	fmt.Println("\nresolve with: delegent approvals approve|deny <id> [--scopes a,b] [--ttl 60]")
 	return nil
 }
 
@@ -116,7 +116,7 @@ func approvalsResolve(verb string, args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: delegent-gateway approvals %s <id>", verb)
+		return fmt.Errorf("usage: delegent approvals %s <id>", verb)
 	}
 	e, err := requireOperator(context.Background(), *home)
 	if err != nil {
@@ -142,7 +142,7 @@ func approvalsResolve(verb string, args []string) error {
 
 func cmdTelegram(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: delegent-gateway telegram setup|link [flags]")
+		return errors.New("usage: delegent telegram setup|link [flags]")
 	}
 	switch args[0] {
 	case "setup":
@@ -175,7 +175,7 @@ func telegramSetupCmd(args []string) error {
 	if err := adminCall(e, http.MethodPost, "/admin/telegram", telegramSetupReq{Token: *token, BotUsername: *botUsername}, &out); err != nil {
 		return err
 	}
-	fmt.Println(out.Status + " — now run 'delegent-gateway telegram link' to bind your chat")
+	fmt.Println(out.Status + " — now run 'delegent telegram link' to bind your chat")
 	return nil
 }
 

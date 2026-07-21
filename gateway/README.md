@@ -1,4 +1,4 @@
-# delegent-gateway — the local Delegent gateway
+# delegent — the local Delegent gateway
 
 A single-binary, single-operator MCP gateway: put it in front of the MCP servers your agents
 use and every tool call passes through **entitlements, human consent, and tamper-evident
@@ -15,19 +15,19 @@ capability slips, the authorization algebra, receipt hash chains — lives in th
 curl -fsSL https://delegent.dev/install.sh | sh
 ```
 
-Installs prebuilt `delegent-gateway` + `delegent` binaries (macOS/Linux, amd64/arm64,
+Installs prebuilt `delegent` + `delegent-proto` binaries (macOS/Linux, amd64/arm64,
 checksum-verified). Or build from source:
 
 ```sh
-go install delegent.dev/gateway/cmd/delegent-gateway@latest
+go install delegent.dev/gateway/cmd/delegent@latest
 ```
 
 ## Quickstart (stdio — Claude Code, Claude Desktop, Cursor, …)
 
 ```sh
-delegent-gateway init
-delegent-gateway target add --id github --endpoint https://your-mcp-server.example/mcp --credential <upstream token>
-delegent-gateway key mint --name laptop        # prints the agent key ONCE
+delegent init
+delegent target add --id github --endpoint https://your-mcp-server.example/mcp --credential <upstream token>
+delegent key mint --name laptop        # prints the agent key ONCE
 ```
 
 Then point your MCP client at the binary instead of at the vendors. Claude Code
@@ -37,7 +37,7 @@ Then point your MCP client at the binary instead of at the vendors. Claude Code
 {
   "mcpServers": {
     "delegent": {
-      "command": "delegent-gateway",
+      "command": "delegent",
       "args": ["stdio"],
       "env": { "DELEGENT_AGENT_KEY": "dgk_…" }
     }
@@ -54,10 +54,10 @@ TTL'd grant is minted and the call proceeds.
 ## Quickstart (HTTP — a shared gateway on a company server)
 
 ```sh
-delegent-gateway init --listen 0.0.0.0:8090
-delegent-gateway target add …
-delegent-gateway key mint --name alice-agent    # one key per developer/agent
-delegent-gateway serve
+delegent init --listen 0.0.0.0:8090
+delegent target add …
+delegent key mint --name alice-agent    # one key per developer/agent
+delegent serve
 ```
 
 Agents connect to `http://host:8090/mcp` with `Authorization: Bearer <agent key>` — the same
@@ -70,7 +70,7 @@ approval channels are the hosted product.
 ## Dashboard
 
 ```sh
-delegent-gateway dashboard
+delegent dashboard
 ```
 
 A terminal dashboard over everything above — four tabs:
@@ -99,16 +99,16 @@ Consent asks resolve through the first channel that works, console-of-last-resor
 1. **elicitation** — the agent's own client shows the dialog (stdio's happy path)
 2. **telegram** — approve/deny buttons in your chat:
    ```sh
-   delegent-gateway telegram setup --token <BotFather token> --bot-username my_bot   # serve must be running
-   delegent-gateway telegram link                                                    # bind your chat
+   delegent telegram setup --token <BotFather token> --bot-username my_bot   # serve must be running
+   delegent telegram link                                                    # bind your chat
    ```
    Run ONE telegram poller per bot token — `serve` runs it; pass `--telegram` to `stdio`
    only when no serve (or other stdio instance) is already polling.
 3. **CLI** — asks that outlive their call park durably; list and resolve them anytime:
    ```sh
-   delegent-gateway approvals                       # requires a running serve
-   delegent-gateway approvals approve creq_… --ttl 60
-   delegent-gateway approvals deny creq_…
+   delegent approvals                       # requires a running serve
+   delegent approvals approve creq_… --ttl 60
+   delegent approvals deny creq_…
    ```
 
 ## What's on disk
@@ -126,7 +126,7 @@ Everything lives under `~/.delegent` (override: `--home` / `DELEGENT_HOME`):
 | `receipts/<principal>.jsonl` | append-only, hash-chained, signed audit log |
 | `events.jsonl` | the operator-facing activity log |
 
-Receipts verify offline with the `delegent` CLI from the core library — no gateway, no trust
+Receipts verify offline with the `delegent-proto` CLI from the protocol library — no gateway, no trust
 in this binary required. Tools introspection drafts a classification per tool; anything it
 can't classify is **refused until you classify it** in `adapters.json` (fail closed).
 
@@ -138,13 +138,13 @@ relaunch the stdio process — to apply them. Runtime approvals need no restart.
 From the repository root (the build needs both modules):
 
 ```sh
-docker build -t delegent-gateway .
+docker build -t delegent .
 docker run -p 8090:8090 -v delegent-data:/data \
-  -e DELEGENT_MASTER_KEY=$(openssl rand -base64 32) delegent-gateway
+  -e DELEGENT_MASTER_KEY=$(openssl rand -base64 32) delegent
 ```
 
 State persists in the `/data` volume; the container init-and-serves on `0.0.0.0:8090`. Manage
-it with the same CLI: `docker exec <ctr> delegent-gateway target add …`.
+it with the same CLI: `docker exec <ctr> delegent target add …`.
 
 ## Not here (yet or by design)
 

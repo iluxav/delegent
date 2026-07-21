@@ -73,7 +73,7 @@ func cmdServe(args []string) error {
 		cleanup()
 		_ = srv.Close()
 	}()
-	log.Printf("[delegent-gateway] build %s | operator %s | up — http://%s/mcp (agents) and /admin (CLI)",
+	log.Printf("[delegent] build %s | operator %s | up — http://%s/mcp (agents) and /admin (CLI)",
 		version, e.operator, e.cfg.ListenAddr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -84,7 +84,7 @@ func cmdServe(args []string) error {
 // cmdStdio serves the identical aggregate surface over stdin/stdout — the transport MCP
 // clients use to launch local servers. The agent key comes from --key or DELEGENT_AGENT_KEY;
 // stdout belongs to the protocol, so all logging goes to stderr and pending consents are
-// resolved out-of-band (telegram, or 'delegent-gateway approvals' against a running serve —
+// resolved out-of-band (telegram, or 'delegent approvals' against a running serve —
 // elicitation-capable clients approve inline).
 func cmdStdio(args []string) error {
 	fs := flag.NewFlagSet("stdio", flag.ExitOnError)
@@ -106,7 +106,7 @@ func cmdStdio(args []string) error {
 	user := e.operator
 	if gateway.AuthRequired(e.st) {
 		if *key == "" {
-			return errors.New("stdio needs an agent key: --key, or DELEGENT_AGENT_KEY (mint one with 'delegent-gateway key mint')")
+			return errors.New("stdio needs an agent key: --key, or DELEGENT_AGENT_KEY (mint one with 'delegent key mint')")
 		}
 		k, err := e.st.GetAgentKeyByHash(ctx, agentkey.Hash(strings.TrimSpace(*key)))
 		if err != nil {
@@ -149,7 +149,7 @@ func cmdStdio(args []string) error {
 	defer cleanup()
 	defer ln.Close()
 
-	log.Printf("[delegent-gateway] stdio up — operator %s | admin http://%s", user, ln.Addr())
+	log.Printf("[delegent] stdio up — operator %s | admin http://%s", user, ln.Addr())
 	return registry.ServeStdio(ctx, user)
 }
 

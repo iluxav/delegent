@@ -71,7 +71,7 @@ func masterKey(home string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join(home, masterKeyFile))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, errors.New("no master key: set DELEGENT_MASTER_KEY or run 'delegent-gateway init'")
+			return nil, errors.New("no master key: set DELEGENT_MASTER_KEY or run 'delegent init'")
 		}
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func requireOperator(ctx context.Context, home string) (*env, error) {
 		return nil, err
 	}
 	if e.operator == "" {
-		return nil, errors.New("no operator provisioned — run 'delegent-gateway init' first")
+		return nil, errors.New("no operator provisioned — run 'delegent init' first")
 	}
 	return e, nil
 }
@@ -251,9 +251,9 @@ func cmdInit(args []string) error {
 initialized %s
 
 next:
-  delegent-gateway target add --id github --endpoint https://api.example.com/mcp --credential <token>
-  delegent-gateway key mint --name my-agent
-  delegent-gateway serve            # or: delegent-gateway stdio --key <agent key>
+  delegent target add --id github --endpoint https://api.example.com/mcp --credential <token>
+  delegent key mint --name my-agent
+  delegent serve            # or: delegent stdio --key <agent key>
 `, *home)
 	return nil
 }

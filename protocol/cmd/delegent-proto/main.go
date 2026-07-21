@@ -1,4 +1,4 @@
-// Command delegent is the Delegent protocol in a terminal: mint, attenuate, inspect, and
+// Command delegent-proto is the Delegent protocol in a terminal: mint, attenuate, inspect, and
 // verify capability slips (chains), and hash/sign/verify tamper-evident receipt chains. It is
 // deliberately stdlib-only — the same guarantee as the library: any party can hold the whole
 // protocol with zero dependencies.
@@ -23,7 +23,7 @@ import (
 // version is stamped via -ldflags "-X main.version=…"; "dev" for plain go build/install.
 var version = "dev"
 
-const usage = `usage: delegent <command> [flags]
+const usage = `usage: delegent-proto <command> [flags]
 
 commands:
   keygen                       generate an ed25519 keypair (hex)
@@ -36,7 +36,7 @@ commands:
   verify-receipts              verify a receipt chain's integrity, order, and authenticity
   version                      print the CLI version
 
-Run 'delegent <command> -h' for that command's flags. Exit codes: 0 verified/ok,
+Run 'delegent-proto <command> -h' for that command's flags. Exit codes: 0 verified/ok,
 1 refused or failed (reason on stderr), 2 usage error.`
 
 func main() {
@@ -54,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, usage)
 		return 0
 	case "version", "--version":
-		fmt.Fprintln(stdout, "delegent", version)
+		fmt.Fprintln(stdout, "delegent-proto", version)
 		return 0
 	case "keygen":
 		err = cmdKeygen(stdout)
@@ -71,11 +71,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "verify-receipts":
 		err = cmdVerifyReceipts(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "delegent: unknown command %q\n%s\n", args[0], usage)
+		fmt.Fprintf(stderr, "delegent-proto: unknown command %q\n%s\n", args[0], usage)
 		return 2
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "delegent:", err)
+		fmt.Fprintln(stderr, "delegent-proto:", err)
 		return 1
 	}
 	return 0

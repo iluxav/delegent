@@ -4,11 +4,11 @@ FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY . .
 WORKDIR /src/gateway
-RUN go build -trimpath -ldflags "-s -w" -o /out/delegent-gateway ./cmd/delegent-gateway
+RUN go build -trimpath -ldflags "-s -w" -o /out/delegent ./cmd/delegent
 
 FROM alpine:3.20
 RUN adduser -D -H delegent && apk add --no-cache ca-certificates
-COPY --from=build /out/delegent-gateway /usr/local/bin/delegent-gateway
+COPY --from=build /out/delegent /usr/local/bin/delegent
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown delegent /data
 USER delegent

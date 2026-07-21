@@ -1,12 +1,12 @@
-// Command delegent-gateway is the local, single-operator Delegent gateway: the same
+// Command delegent is the local, single-operator Delegent gateway: the same
 // consent/authority engine the hosted product runs, self-contained in one binary — no
 // database, no accounts, state in plain JSON files under one directory.
 //
 // Two front doors serve the identical aggregate MCP surface (every enabled target's tools,
 // namespaced <target>__<tool>, consent and entitlements enforced per target):
 //
-//	delegent-gateway serve    HTTP  — /mcp for agents, /mcp/{target} for pinning, /admin for the CLI
-//	delegent-gateway stdio    stdio — for MCP clients that launch local servers (Claude, Cursor, …)
+//	delegent serve    HTTP  — /mcp for agents, /mcp/{target} for pinning, /admin for the CLI
+//	delegent stdio    stdio — for MCP clients that launch local servers (Claude, Cursor, …)
 //
 // Everything lives under the home directory (default ~/.delegent, override with --home or
 // DELEGENT_HOME). Secrets are sealed with a 32-byte master key read from DELEGENT_MASTER_KEY
@@ -21,7 +21,7 @@ import (
 // version is stamped via -ldflags "-X main.version=…"; "dev" for plain go build/install.
 var version = "dev"
 
-const usage = `usage: delegent-gateway <command> [flags]
+const usage = `usage: delegent <command> [flags]
 
 commands:
   init                         create the home dir, master key, operator identity
@@ -34,7 +34,7 @@ commands:
   telegram setup|link          configure telegram approvals (talks to a running serve)
   version                      print the build version
 
-Run 'delegent-gateway <command> -h' for that command's flags. State edited by target/key
+Run 'delegent <command> -h' for that command's flags. State edited by target/key
 commands is read at startup: restart serve (or your MCP client, for stdio) to pick changes up.
 `
 
@@ -70,7 +70,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "delegent-gateway: %v\n", err)
+		fmt.Fprintf(os.Stderr, "delegent: %v\n", err)
 		os.Exit(1)
 	}
 }

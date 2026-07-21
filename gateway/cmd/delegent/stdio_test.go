@@ -19,7 +19,7 @@ import (
 
 // TestStdioRoundTrip drives a REAL MCP session through the built binary: a fake upstream MCP
 // vendor is stood up over HTTP, the instance is initialized and the target provisioned via
-// the CLI code paths, and then an MCP client launches `delegent-gateway stdio` exactly like
+// the CLI code paths, and then an MCP client launches `delegent stdio` exactly like
 // Claude Desktop would — asserting the aggregate surface (namespaced tools) comes back and a
 // consent-gated call flows through elicitation to the vendor and back.
 func TestStdioRoundTrip(t *testing.T) {
@@ -68,7 +68,7 @@ func TestStdioRoundTrip(t *testing.T) {
 	}
 
 	// 4. build the binary and connect over stdio, approving every consent ask via elicitation
-	bin := filepath.Join(t.TempDir(), "delegent-gateway")
+	bin := filepath.Join(t.TempDir(), "delegent")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}

@@ -4,5 +4,5 @@
 # mapping is the exposure decision). Pass DELEGENT_MASTER_KEY (recommended) or the generated
 # master.key lands in the volume.
 set -e
-delegent-gateway init --home "${DELEGENT_HOME:-/data}" --listen 0.0.0.0:8090
-exec delegent-gateway serve --home "${DELEGENT_HOME:-/data}" "$@"
+delegent init --home "${DELEGENT_HOME:-/data}" --listen 0.0.0.0:8090
+exec delegent serve --home "${DELEGENT_HOME:-/data}" "$@"

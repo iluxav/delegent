@@ -1,5 +1,5 @@
 #!/bin/sh
-# Delegent installer — downloads the latest release binaries (delegent-gateway + delegent)
+# Delegent installer — downloads the latest release binaries (delegent + delegent-proto)
 # for this OS/arch from GitHub releases, verifies the sha256 checksum, and installs them.
 #
 #   curl -fsSL https://delegent.dev/install.sh | sh
@@ -17,7 +17,7 @@ err() { printf 'delegent install: %s\n' "$*" >&2; exit 1; }
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$OS" in
   darwin|linux) ;;
-  *) err "unsupported OS: $OS (darwin and linux binaries are published; try: go install delegent.dev/gateway/cmd/delegent-gateway@latest)" ;;
+  *) err "unsupported OS: $OS (darwin and linux binaries are published; try: go install delegent.dev/gateway/cmd/delegent@latest)" ;;
 esac
 
 ARCH=$(uname -m)
@@ -69,11 +69,11 @@ if [ ! -w "$DIR" ] 2>/dev/null || [ ! -d "$DIR" ]; then
   fi
 fi
 $SUDO mkdir -p "$DIR"
-$SUDO install -m 0755 "$TMP/delegent-gateway" "$TMP/delegent" "$DIR/"
+$SUDO install -m 0755 "$TMP/delegent" "$TMP/delegent-proto" "$DIR/"
 
-printf 'installed delegent-gateway and delegent %s to %s\n' "$VERSION" "$DIR"
+printf 'installed delegent and delegent-proto %s to %s\n' "$VERSION" "$DIR"
 case ":$PATH:" in
   *":$DIR:"*) ;;
   *) printf 'note: %s is not on your PATH\n' "$DIR" ;;
 esac
-printf 'get started:  delegent-gateway init\n'
+printf 'get started:  delegent init\n'

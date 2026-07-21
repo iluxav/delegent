@@ -14,7 +14,7 @@ import (
 
 func cmdKey(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: delegent-gateway key mint|list|revoke [flags]")
+		return errors.New("usage: delegent key mint|list|revoke [flags]")
 	}
 	switch args[0] {
 	case "mint":
@@ -70,7 +70,7 @@ func keyList(args []string) error {
 		return err
 	}
 	if len(keys) == 0 {
-		fmt.Println("no agent keys — mint one with 'delegent-gateway key mint --name <name>'")
+		fmt.Println("no agent keys — mint one with 'delegent key mint --name <name>'")
 		return nil
 	}
 	for _, k := range keys {
@@ -94,7 +94,7 @@ func keyRevoke(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: delegent-gateway key revoke <akey_id>")
+		return errors.New("usage: delegent key revoke <akey_id>")
 	}
 	ctx := context.Background()
 	e, err := requireOperator(ctx, *home)
