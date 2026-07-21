@@ -398,17 +398,21 @@ func (s *targetsScreen) view(width, height int) string {
 		return styDim.Render("\n  no targets — add one with 'delegent target add'")
 	}
 	var b strings.Builder
-	b.WriteString(styBold.Render(fmt.Sprintf("  %-16s %-9s %-6s %-14s %s", "TARGET", "STATE", "TOOLS", "CREDENTIAL", "ENDPOINT")) + "\n")
+	endpointW := width - 52
+	if endpointW < 16 {
+		endpointW = 16
+	}
+	b.WriteString("  " + styHead.Render(padCell("TARGET", 16)+" "+padCell("STATE", 8)+" "+padCell("TOOLS", 5)+" "+padCell("CREDENTIAL", 12)+" "+"ENDPOINT") + "\n")
 	for i, r := range s.rows {
-		state := styStatusOK.Render("enabled ")
+		state, stateSty := "enabled", styStatusOK
 		if !r.Enabled {
-			state = styStatusOff.Render("DISABLED")
+			state, stateSty = "DISABLED", styStatusOff
 		}
-		line := fmt.Sprintf("  %-16s %-9s %-6d %-14s %s", r.ID, state, r.Tools, r.CredentialKind, r.Endpoint)
+		cells := padCell(r.ID, 16) + " " + stateSty.Render(padCell(state, 8)) + " " + padCell(itoa(r.Tools), 5) + " " + padCell(r.CredentialKind, 12) + " " + truncate(r.Endpoint, endpointW)
 		if i == s.cursor {
-			line = styCursor.Render(line)
+			cells = styCursor.Render(padCell(r.ID, 16) + " " + padCell(state, 8) + " " + padCell(itoa(r.Tools), 5) + " " + padCell(r.CredentialKind, 12) + " " + truncate(r.Endpoint, endpointW))
 		}
-		b.WriteString(line + "\n")
+		b.WriteString("  " + cells + "\n")
 	}
 	return b.String()
 }
@@ -433,24 +437,25 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 	b.WriteString("\n\n")
 
 	if s.pane == 0 {
-		b.WriteString(styBold.Render(fmt.Sprintf("  %-28s %-12s %-22s %s", "TOOL", "EFFECT", "SCOPE", "")) + "\n")
+		b.WriteString("  " + styHead.Render(padCell("TOOL", 28)+" "+padCell("EFFECT", 12)+" "+"SCOPE") + "\n")
 		for i, t := range s.tools {
-			eff := t.Effect
+			eff, effSty := t.Effect, styDim
 			if provision.IsUnknown(eff) {
-				eff = styErr.Render("unknown→deny")
+				eff, effSty = "unknown→deny", styErr
 			}
 			mark := ""
 			if s.newTools[t.Name] {
-				mark = styStatusOK.Render(" NEW")
+				mark = " " + styStatusOK.Render("NEW")
 			}
-			line := fmt.Sprintf("  %-28s %-12s %-22s%s", truncate(t.Name, 28), eff, t.Scope, mark)
+			line := padCell(t.Name, 28) + " " + effSty.Render(padCell(eff, 12)) + " " + padCell(t.Scope, 22) + mark
 			if i == s.toolCursor {
-				line = styCursor.Render(line)
 				if s.editing {
-					line = fmt.Sprintf("  %-28s %-12s %s", truncate(t.Name, 28), t.Effect, s.scopeEdit.View())
+					line = styCursor.Render(padCell(t.Name, 28)+" "+padCell(t.Effect, 12)) + " " + s.scopeEdit.View()
+				} else {
+					line = styCursor.Render(padCell(t.Name, 28)+" "+padCell(eff, 12)+" "+padCell(t.Scope, 22)) + mark
 				}
 			}
-			b.WriteString(line + "\n")
+			b.WriteString("  " + line + "\n")
 		}
 	} else {
 		b.WriteString(styDim.Render("  the operator's entitlement on this target — what grants may draw from") + "\n\n")
@@ -459,17 +464,18 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 			note := ""
 			if r.disabled {
 				box = "[ ]"
-				note = styDim.Render("  (opted out)")
+				note = "  " + styDim.Render("(opted out)")
 			}
 			eff := s.scopeEffect(r.scope)
 			if eff == "" {
 				eff = "—"
 			}
-			line := fmt.Sprintf("  %s %-24s %-12s %s %s%s", box, r.scope, eff, riskStyle(r.risk).Render(fmt.Sprintf("%-7s", r.risk)), styDim.Render(truncate(r.human, 38)), note)
+			plain := box + " " + padCell(r.scope, 24) + " " + padCell(eff, 12)
+			line := plain + " " + riskStyle(r.risk).Render(padCell(r.risk, 7)) + " " + styDim.Render(truncate(r.human, 38)) + note
 			if i == s.scopeCur {
-				line = styCursor.Render(line)
+				line = styCursor.Render(plain+" "+padCell(r.risk, 7)) + " " + styDim.Render(truncate(r.human, 38)) + note
 			}
-			b.WriteString(line + "\n")
+			b.WriteString("  " + line + "\n")
 		}
 		b.WriteString("\n" + styDim.Render("  effective: "+strings.Join(s.detail.Entitlement.Effective, " ")) + "\n")
 	}

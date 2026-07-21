@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,12 @@ import (
 var (
 	styTabActive = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("57")).Padding(0, 1)
 	styTab       = lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Padding(0, 1)
+	styBrand     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("183"))
+	styBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("161")).Padding(0, 1)
+	styRule      = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	styHead      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250"))
+	styCardOn    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("57")).Padding(0, 1)
+	styCardOff   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Padding(0, 1)
 	styStatusOK  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styStatusOff = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	styErr       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
@@ -31,6 +38,27 @@ var (
 	styRiskLow   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styBox       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 2)
 )
+
+// padCell truncates and right-pads PLAIN text to exactly w columns. Always pad before
+// styling: ANSI escapes count as characters in fmt-width math, which is how columns drift.
+func padCell(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	s = truncate(s, w)
+	if n := w - lipgloss.Width(s); n > 0 {
+		s += strings.Repeat(" ", n)
+	}
+	return s
+}
+
+// shortID renders a long nonce id as a stable, readable handle.
+func shortID(id string) string {
+	if len(id) > 10 {
+		return id[:10] + "…"
+	}
+	return id
+}
 
 func riskStyle(risk string) lipgloss.Style {
 	switch risk {
@@ -248,16 +276,20 @@ func (r *rootModel) View() string {
 	if !r.live {
 		status = styStatusOff.Render("○ offline — edits apply on next gateway start")
 	}
-	bar := lipgloss.JoinHorizontal(lipgloss.Center, " delegent ▸ ", lipgloss.JoinHorizontal(lipgloss.Center, tabs...))
+	bar := lipgloss.JoinHorizontal(lipgloss.Center, styBrand.Render(" delegent "), lipgloss.JoinHorizontal(lipgloss.Center, tabs...))
 	gap := r.width - lipgloss.Width(bar) - lipgloss.Width(status) - 1
 	if gap < 1 {
 		gap = 1
 	}
 	top := bar + lipgloss.NewStyle().Width(gap).Render("") + status
+	rule := styRule.Render(strings.Repeat("─", max(1, r.width)))
 
-	// body
-	bodyH := r.height - 3
-	body := r.screens[r.active].view(r.width, bodyH)
+	// body, height-boxed so the footer stays anchored
+	bodyH := r.height - 5
+	if bodyH < 3 {
+		bodyH = 3
+	}
+	body := lipgloss.NewStyle().Height(bodyH).MaxHeight(bodyH).Render(r.screens[r.active].view(r.width, bodyH))
 
 	// footer: flash wins over hints
 	footer := styDim.Render(" " + r.screens[r.active].hints() + " · tab switch · q quit")
@@ -268,5 +300,5 @@ func (r *rootModel) View() string {
 			footer = styStatusOK.Render(" ✓ " + r.flash)
 		}
 	}
-	return top + "\n" + lipgloss.NewStyle().Height(bodyH).Render(body) + "\n" + footer
+	return top + "\n" + rule + "\n" + body + "\n" + rule + "\n" + footer
 }

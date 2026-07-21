@@ -289,21 +289,22 @@ func (s *keysScreen) view(width, height int) string {
 		b.WriteString(styDim.Render("\n  no agent keys — press n to mint one"))
 		return b.String()
 	}
-	b.WriteString(styBold.Render(fmt.Sprintf("  %-24s %-10s %-12s %-9s %-16s %s", "ID", "PREFIX", "NAME", "STATE", "CONSENT", "LAST USED")) + "\n")
+	b.WriteString("  " + styHead.Render(padCell("ID", 24)+" "+padCell("PREFIX", 10)+" "+padCell("NAME", 12)+" "+padCell("STATE", 8)+" "+padCell("CONSENT", 16)+" "+"LAST USED") + "\n")
 	for i, k := range s.rows {
-		state := styStatusOK.Render("active   ")
+		state, stateSty := "active", styStatusOK
 		if k.RevokedAt != 0 {
-			state = styErr.Render("REVOKED  ")
+			state, stateSty = "REVOKED", styErr
 		}
 		last := "never"
 		if k.LastUsedAt != 0 {
 			last = time.UnixMilli(k.LastUsedAt).Format("Jan 02 15:04")
 		}
-		line := fmt.Sprintf("  %-24s %-10s %-12s %-9s %-16s %s", k.ID, k.Prefix+"…", truncate(k.Name, 12), state, truncate(presetLabel(k.ConsentChannels), 16), last)
+		plainCells := padCell(k.ID, 24) + " " + padCell(k.Prefix+"…", 10) + " " + padCell(k.Name, 12)
+		line := plainCells + " " + stateSty.Render(padCell(state, 8)) + " " + padCell(presetLabel(k.ConsentChannels), 16) + " " + last
 		if i == s.cursor {
-			line = styCursor.Render(line)
+			line = styCursor.Render(plainCells + " " + padCell(state, 8) + " " + padCell(presetLabel(k.ConsentChannels), 16) + " " + last)
 		}
-		b.WriteString(line + "\n")
+		b.WriteString("  " + line + "\n")
 		if s.picking && i == s.cursor {
 			for j, pz := range consentPresets {
 				mark := "  "

@@ -170,26 +170,27 @@ func (s *auditScreen) view(width, height int) string {
 		b.WriteString(styDim.Render("\n  no events yet"))
 		return b.String()
 	}
-	b.WriteString(styBold.Render(fmt.Sprintf("  %-12s %-20s %-10s %-14s %-24s %s", "TIME", "TYPE", "KEY", "TARGET", "TOOL", "DECISION")) + "\n")
-	max := height - 4
-	if max < 3 {
-		max = 3
+	b.WriteString("  " + styHead.Render(padCell("TIME", 14)+" "+padCell("TYPE", 20)+" "+padCell("KEY", 10)+" "+padCell("TARGET", 14)+" "+padCell("TOOL", 24)+" "+"DECISION") + "\n")
+	limit := height - 4
+	if limit < 3 {
+		limit = 3
 	}
 	for i, e := range rows {
-		if i >= max {
-			b.WriteString(styDim.Render(fmt.Sprintf("  … %d more (filter to narrow)", len(rows)-max)) + "\n")
+		if i >= limit {
+			b.WriteString(styDim.Render(fmt.Sprintf("  … %d more (filter to narrow)", len(rows)-limit)) + "\n")
 			break
 		}
 		ts := time.UnixMilli(e.CreatedAt).Format("Jan02 15:04:05")
-		dec := e.Decision
-		if dec == "deny" || e.Type == store.EventPermissionDenied || e.Type == store.EventError {
-			dec = styErr.Render(dec + " " + e.Type)
+		bad := e.Decision == "deny" || e.Type == store.EventPermissionDenied || e.Type == store.EventError
+		plain := padCell(ts, 14) + " " + padCell(e.Type, 20) + " " + padCell(e.KeyName, 10) + " " + padCell(e.TargetID, 14) + " " + padCell(e.Tool, 24) + " "
+		line := plain + e.Decision
+		if bad {
+			line = plain + styErr.Render(e.Decision)
 		}
-		line := fmt.Sprintf("  %-12s %-20s %-10s %-14s %-24s %s", ts, e.Type, truncate(e.KeyName, 10), truncate(e.TargetID, 14), truncate(e.Tool, 24), dec)
 		if i == s.cursor {
-			line = styCursor.Render(line)
+			line = styCursor.Render(plain + e.Decision)
 		}
-		b.WriteString(line + "\n")
+		b.WriteString("  " + line + "\n")
 	}
 	return b.String()
 }

@@ -70,14 +70,19 @@ func (s *alertsScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case consentsLoadedMsg:
 		s.rows = s.rows[:0]
+		seen := map[string]bool{}
 		for _, p := range msg.b.Live {
 			row := alertRow{id: p.ID, target: p.TargetID, agent: p.AgentName, headline: p.Headline, intent: p.Intent, warnings: p.OverAskWarnings}
 			for _, sc := range p.Scopes {
 				row.scopes = append(row.scopes, alertScope{scope: sc.Scope, human: sc.Human, risk: sc.Risk, granted: true})
 			}
 			s.rows = append(s.rows, row)
+			seen[p.ID] = true
 		}
 		for _, p := range msg.b.Parked {
+			if seen[p.ID] {
+				continue // the live nonce and its durable row are ONE ask — never show it twice
+			}
 			row := alertRow{id: p.ID, target: p.TargetID, agent: p.AgentName, headline: p.Headline, intent: p.Intent, parked: true}
 			for _, sc := range p.Scopes {
 				row.scopes = append(row.scopes, alertScope{scope: sc, granted: true})
@@ -208,69 +213,113 @@ func (s *alertsScreen) hints() string {
 	return "↑↓ select · a approve · d deny · r reload"
 }
 
+// cleanWarning tidies engine over-ask text for display (an empty inferred-needs list renders
+// as a dangling "only requires: ." upstream — display-only fix).
+func cleanWarning(w string) string {
+	w = strings.TrimSpace(w)
+	w = strings.ReplaceAll(w, "only requires: .", "doesn't clearly require it.")
+	return w
+}
+
 func (s *alertsScreen) view(width, height int) string {
 	var b strings.Builder
 	if len(s.rows) == 0 {
-		b.WriteString(styDim.Render("\n  no pending approvals"))
-	} else if !s.deciding {
-		b.WriteString(styBold.Render("  ↑↓ select   a approve   d deny") +
-			styDim.Render("   — the agent is waiting on you; denials and approvals land instantly") + "\n\n")
-	} else {
-		b.WriteString(styBold.Render("  approve: space toggles a scope · t TTL · b budget · enter confirm · esc back") + "\n\n")
+		b.WriteString("\n" + styDim.Render("  no pending approvals — new asks appear here the moment an agent needs you") + "\n")
+		if len(s.history) > 0 {
+			b.WriteString("\n" + styDim.Render("  recent: "+strings.Join(s.history, " · ")) + "\n")
+		}
+		return b.String()
 	}
+
+	if s.deciding {
+		b.WriteString("  " + styHead.Render("approve: space toggles a scope · t TTL · b budget · enter confirm · esc back") + "\n\n")
+	} else {
+		b.WriteString("  " + styHead.Render("↑↓ select · a approve · d deny") +
+			styDim.Render("  — the agent is waiting on you") + "\n\n")
+	}
+
+	cardW := width - 6
+	if cardW > 100 {
+		cardW = 100
+	}
+	if cardW < 40 {
+		cardW = 40
+	}
+	inner := cardW - 4 // border + padding
+
 	for i, row := range s.rows {
-		kind := styStatusOff.Render("LIVE  ")
+		selected := i == s.cursor
+		kind := styStatusOff.Render("LIVE")
 		if row.parked {
 			kind = styDim.Render("parked")
 		}
+		marker := "  "
+		if selected {
+			marker = styBold.Render("▸ ")
+		}
+
 		head := row.headline
 		if head == "" {
 			var scopes []string
 			for _, sc := range row.scopes {
 				scopes = append(scopes, sc.scope)
 			}
-			head = strings.Join(scopes, " ")
+			head = "wants: " + strings.Join(scopes, ", ")
 		}
-		marker := "  "
-		if i == s.cursor {
-			marker = "▸ "
-		}
-		line := fmt.Sprintf("%s%-14s %s %-12s %-12s %s", marker, row.id, kind, truncate(row.agent, 12), truncate(row.target, 12), head)
-		if i == s.cursor {
-			line = styCursor.Render(line)
-		}
-		b.WriteString(line + "\n")
-		if row.intent != "" {
-			b.WriteString(styDim.Render("                 why: "+row.intent) + "\n")
+
+		var card strings.Builder
+		title := styBold.Render(shortID(row.id)) + "  " + kind + styDim.Render("  "+truncate(row.agent, 20)+" → "+truncate(row.target, 20))
+		card.WriteString(title + "\n")
+		card.WriteString(truncate(head, inner) + "\n")
+		// the headline already carries the agent's why — repeat it only when it adds anything
+		if row.intent != "" && !strings.Contains(head, row.intent) {
+			card.WriteString(styDim.Render(truncate("why: "+row.intent, inner)) + "\n")
 		}
 		for _, w := range row.warnings {
-			b.WriteString(styRiskHigh.Render("                 ⚠ "+w) + "\n")
+			card.WriteString(styRiskHigh.Render(truncate("⚠ "+cleanWarning(w), inner)) + "\n")
 		}
-		if s.deciding && i == s.cursor {
-			b.WriteString(s.viewPicker(row))
+		if s.deciding && selected {
+			card.WriteString(s.viewPicker(row, inner))
+		} else if selected {
+			card.WriteString(styDim.Render("a approve · d deny") + "\n")
+		}
+
+		box := styCardOff
+		if selected {
+			box = styCardOn
+		}
+		rendered := box.Width(cardW).Render(strings.TrimRight(card.String(), "\n"))
+		// hang the selection marker off the card's first line
+		lines := strings.Split(rendered, "\n")
+		for li, ln := range lines {
+			if li == 0 {
+				b.WriteString(marker + ln + "\n")
+			} else {
+				b.WriteString("  " + ln + "\n")
+			}
 		}
 	}
 	if len(s.history) > 0 {
-		b.WriteString("\n" + styDim.Render("  recent: "+strings.Join(s.history, " · ")) + "\n")
+		b.WriteString(styDim.Render("  recent: "+strings.Join(s.history, " · ")) + "\n")
 	}
 	return b.String()
 }
 
-func (s *alertsScreen) viewPicker(row alertRow) string {
+func (s *alertsScreen) viewPicker(row alertRow, inner int) string {
 	var b strings.Builder
+	b.WriteString(styRule.Render(strings.Repeat("─", max(1, inner))) + "\n")
 	for j, sc := range row.scopes {
 		box := "[ ]"
 		if sc.granted {
 			box = "[x]"
 		}
-		line := fmt.Sprintf("      %s %-24s %s %s", box, sc.scope, riskStyle(sc.risk).Render(sc.risk), styDim.Render(sc.human))
+		line := box + " " + padCell(sc.scope, 24) + " " + riskStyle(sc.risk).Render(padCell(sc.risk, 7)) + " " + styDim.Render(truncate(sc.human, inner-38))
 		if j == s.scopeCur {
-			line = styCursor.Render(line)
+			line = styCursor.Render(padCell(box+" "+sc.scope, 25)) + " " + riskStyle(sc.risk).Render(padCell(sc.risk, 7)) + " " + styDim.Render(truncate(sc.human, inner-38))
 		}
 		b.WriteString(line + "\n")
 	}
-	b.WriteString(fmt.Sprintf("      TTL %dm (t) · budget $%.0f (b) · enter approves the checked scopes\n",
-		ttlPresets[s.ttlIdx], budgetPresets[s.budgetIdx]))
+	b.WriteString(styDim.Render(fmt.Sprintf("TTL %dm (t) · budget $%.0f (b) · enter approves the checked scopes", ttlPresets[s.ttlIdx], budgetPresets[s.budgetIdx])) + "\n")
 	return b.String()
 }
 
