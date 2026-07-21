@@ -17,6 +17,7 @@ import (
 
 	"delegent.dev/gateway"
 	"delegent.dev/gateway/agentkey"
+	"delegent.dev/gateway/id"
 	"delegent.dev/gateway/secretstore"
 	"delegent.dev/gateway/store"
 	"delegent.dev/gateway/telegram"
@@ -150,7 +151,14 @@ func cmdStdio(args []string) error {
 	defer ln.Close()
 
 	log.Printf("[delegent] stdio up — operator %s | admin http://%s", user, ln.Addr())
-	return registry.ServeStdio(ctx, user)
+	err = registry.ServeStdio(ctx, user)
+	// The stdio transport IS the connection: its end is the one disconnect this process can
+	// observe, so record it — the activity log should show when an agent's session ended.
+	_ = e.st.AppendEvent(context.Background(), &store.Event{
+		ID: id.New("evt"), CreatedAt: nowMillis(), Type: store.EventDisconnected,
+		UserID: user, Reason: "stdio session ended",
+	})
+	return err
 }
 
 // --- the /admin surface (bearer = config admin_token) ---

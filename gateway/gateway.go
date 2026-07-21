@@ -756,6 +756,7 @@ func stripIntent(args map[string]any) (string, map[string]any) {
 // spend against the budget, then forward.
 func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ctx = withCallProgress(ctx, req) // consent waits report progress if the call asked
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
 			_ = json.Unmarshal(req.Params.Arguments, &args)
@@ -998,6 +999,7 @@ func (g *Gateway) openDialogNonWidgetRedirect(connID string) *mcp.CallToolResult
 }
 
 func (g *Gateway) handleRequestAccess(ctx context.Context, req *mcp.CallToolRequest, a requestAccessArgs) (*mcp.CallToolResult, any, error) {
+	ctx = withCallProgress(ctx, req)
 	connID := req.Session.ID()
 	// DELEGENT_AUTOGRANT bypasses mode routing (elicitation path auto-answers). Otherwise:
 	// widget-capable clients are redirected to open_access_dialog (request_access has no
@@ -1052,6 +1054,7 @@ func (g *Gateway) handleRequestAccess(ctx context.Context, req *mcp.CallToolRequ
 // request_access (a structuredContent-only dialog with no _meta.ui is useless to it). On a
 // widget-mode client it runs the SAME two-phase flow request_access used to — widgetRequestAccess.
 func (g *Gateway) handleOpenAccessDialog(ctx context.Context, req *mcp.CallToolRequest, a requestAccessArgs) (*mcp.CallToolResult, any, error) {
+	ctx = withCallProgress(ctx, req)
 	connID := req.Session.ID()
 	if r := g.openDialogNonWidgetRedirect(connID); r != nil {
 		log.Printf("open_access_dialog — non-widget client redirected to request_access")

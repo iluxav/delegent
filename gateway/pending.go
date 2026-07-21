@@ -198,6 +198,21 @@ func (p *pendingStore) consume(id, widgetToken, connID, principal string) (pendi
 	return *pc, nil
 }
 
+// withdraw removes a live, unused record — the agent abandoned the call (MCP cancellation or
+// a dropped connection), so there is no one left to grant to. Reports whether a record was
+// actually removed; an already-used (just-resolved) record is left alone, so a decision that
+// raced the cancellation still wins.
+func (p *pendingStore) withdraw(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pc, ok := p.m[id]
+	if !ok || pc.used {
+		return false
+	}
+	delete(p.m, id)
+	return true
+}
+
 // listLive returns a copy of every live, unused pending record — the console's read model.
 // The web console shows these so a human can GRANT a request from a client (e.g. ChatGPT) that
 // can neither elicit nor render the widget. Pruning of the expired happens lazily on create;

@@ -323,7 +323,25 @@ func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason stri
 	log.Printf("🔒 %s needs [%s] — console consent PENDING (request %s, agent %s); blocking up to %s for a same-turn decision (persisted, approvable for %s)",
 		label, strings.Join(scopes, ", "), pc.ID, view.AgentName, g.consentSyncWait(), g.consentRequestTTL())
 
+	// Live wait telemetry: a call that supplied a progressToken sees WHY it is blocked, and a
+	// heartbeat every few seconds while the sync window runs. No-op without a token.
+	emitProgress(ctx, "⏳ waiting for human approval ("+pc.ID+") — a person must approve ["+strings.Join(scopes, ", ")+"]")
+	stopBeat := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(5 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stopBeat:
+				return
+			case <-tick.C:
+				emitProgress(ctx, "⏳ still waiting for human approval ("+pc.ID+")")
+			}
+		}
+	}()
+
 	outcome, decided := awaitConsent(ctx, pc.done, g.consentSyncWait())
+	close(stopBeat)
 	g.pending.setWaiting(pc.ID, false)
 	if !decided { // close the race between the timer firing and a just-landed resolve
 		select {
@@ -331,6 +349,20 @@ func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason stri
 			decided = true
 		default:
 		}
+	}
+
+	// The agent abandoned the call (MCP cancellation, or the connection died) with no decision
+	// landed: WITHDRAW the ask — there is no one left to grant to, and a ghost ask a human can
+	// approve into the void is worse than none. A decision that raced the cancellation wins
+	// (withdraw skips used records). The durable row is finalized "cancelled" for the audit
+	// trail, and subscribers (dashboard badge, console) see it resolve.
+	if !decided && ctx.Err() != nil {
+		if g.pending.withdraw(pc.ID) {
+			g.finalizeConsentRow(pc.ID, "cancelled", nil, 0, 0)
+			g.publishConsent(ConsentEvent{Type: "resolved", Owner: pc.Principal, ID: pc.ID})
+			log.Printf("🚮 %s console consent %s WITHDRAWN — the agent cancelled before a human decided", label, pc.ID)
+		}
+		return toolError("🔒 DELEGENT: the request was cancelled before a human decided — nothing was granted.")
 	}
 
 	if decided && outcome.granted {

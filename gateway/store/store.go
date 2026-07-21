@@ -104,7 +104,9 @@ type Escalation struct {
 // console parks one, the guarded call returns "pending — retry shortly" after a short sync
 // window, and a human approves/denies it ANYTIME from the console. Unlike the in-memory
 // pending nonce (gateway.pendingConsent), this row outlives the blocked call, so approval can
-// land long after the agent gave up and retried. Status is one of pending|approved|denied|expired.
+// land long after the agent gave up and retried. Status is one of
+// pending|approved|denied|expired|cancelled (cancelled = the agent withdrew the call
+// before any human decided).
 type ConsentRequest struct {
 	ID        string
 	TargetID  string
@@ -136,6 +138,7 @@ const (
 	EventPermissionGranted   = "permission_granted"
 	EventPermissionDenied    = "permission_denied"
 	EventError               = "error"
+	EventDisconnected        = "disconnected"
 )
 
 // Event is one row of the durable, operator-facing ACTIVITY LOG: an append-only stream of what
