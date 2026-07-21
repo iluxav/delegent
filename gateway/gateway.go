@@ -28,7 +28,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/agentkey"
 	"delegent.dev/gateway/broker"
 	"delegent.dev/gateway/controlplane"
@@ -39,6 +38,7 @@ import (
 	"delegent.dev/gateway/rootkeys"
 	"delegent.dev/gateway/secretstore"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // Gateway serves one target: its adapter/advisor, control plane, broker, the connected
@@ -53,7 +53,7 @@ type Gateway struct {
 	server   *mcp.Server
 	handler  http.Handler
 
-	sessMu     sync.Mutex
+	sessMu       sync.Mutex
 	byConn       map[string]string     // MCP connection ID -> the caller's accumulating session handle
 	byConnCaps   map[string]clientCaps // MCP connection ID -> what the client declared at initialize
 	byConnMeta   map[string]callMeta   // MCP connection ID -> the callMeta of the last guarded call (for the widget headline)
@@ -263,11 +263,20 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "delegent", Version: "0.2.0"}, &mcp.ServerOptions{
 		Capabilities: serverCaps,
-		Instructions: "This server gates each tool behind human consent. To avoid a separate approval " +
-			"per tool: first call plan_access to see the capabilities you can be granted, then call " +
-			"request_access with the ones your task needs — you get ONE approval dialog for the whole set. " +
-			"Access is additive: as your task evolves and needs more, call plan_access/request_access again. " +
-			"You may still call any tool directly; you'll just be asked to approve that tool's access on demand.",
+		Instructions: "Delegent is a consent gateway: every tool on this server reaches the real service only " +
+			"within what the user has approved, and every decision is recorded.\n\n" +
+			"Prefer Delegent's own tools first:\n" +
+			"- plan_access lists the capabilities you can be granted; request_access then asks the human ONCE " +
+			"for the bundle your task needs — do this up front instead of triggering a separate approval per " +
+			"tool call. Access is additive: as the task grows, plan_access/request_access again.\n" +
+			"- Fill _delegent_intent on EVERY call: one sentence, in the user's own words, on why this call " +
+			"serves their task. The human approving reads it — clear intent gets faster approvals.\n" +
+			"- A denial is the gateway working, not a bug. \"pending approval\": a human was asked — retry " +
+			"shortly. \"not classified\" / \"cannot be granted\": no scope can allow it — tell the user, do NOT " +
+			"retry or work around it. A vendor-outage note: your access is intact — just retry later.\n" +
+			"- Sub-agents: narrow_access mints a strictly weaker session to hand down; escalate asks your " +
+			"parent for more — neither grants by itself. receipts shows the audit trail; revoke drops held " +
+			"access when the task is done.",
 		// Log what each connecting client actually declares — the difference between a
 		// consent dialog appearing and a fail-closed denial is whether the client (or the
 		// bridge in front of it) advertises elicitation or the MCP Apps ui extension.
@@ -1253,7 +1262,7 @@ func makeVerifier(st store.Store, targetID string) auth.TokenVerifier {
 		go func() { _ = st.TouchAgentKey(context.Background(), k.ID, nowMillis()) }()
 		return &auth.TokenInfo{
 			UserID:     k.UserID,
-			Scopes:     ent.Effective(), // scopes minus the operator's toggle-offs
+			Scopes:     ent.Effective(),               // scopes minus the operator's toggle-offs
 			Expiration: time.Now().AddDate(100, 0, 0), // agent keys don't expire; they're revoked
 			// Extra threads the caller's durable identity (key prefix/name) and resolved IP to the
 			// activity log; key_name survives rotation, so it is the aggregation key there.

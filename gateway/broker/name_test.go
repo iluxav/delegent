@@ -38,8 +38,8 @@ func TestAgentDisplayName(t *testing.T) {
 		{"sess_11112222", "main-agent-11112222"},
 		{"sess_33334444", "main-agent-11112222→sub-agent-33334444"},
 		{"sess_55556666", "main-agent-11112222→sub-agent-33334444→sub-agent-55556666"},
-		{"sess_77778888", "sess_77778888"},   // missing parent → bare handle fallback
-		{"sess_nowhere", "sess_nowhere"},     // unknown handle → bare handle fallback
+		{"sess_77778888", "sess_77778888"}, // missing parent → bare handle fallback
+		{"sess_nowhere", "sess_nowhere"},   // unknown handle → bare handle fallback
 	}
 	for _, c := range cases {
 		if got := b.AgentDisplayName(c.handle); got != c.want {

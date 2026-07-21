@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/loader"
 	"delegent.dev/gateway/rootkeys"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 func newCP(t *testing.T) *ControlPlane {

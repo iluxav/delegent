@@ -16,10 +16,10 @@ import (
 	"strings"
 	"sync"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/id"
 	"delegent.dev/gateway/loader"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // ConsentScope is one grantable scope presented to the human, with its description.

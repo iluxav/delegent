@@ -16,46 +16,46 @@ import (
 // dependencies. It deep-copies on the way in and out so callers cannot mutate stored state
 // through a retained pointer — the same isolation a row read from a database gives you.
 type MemStore struct {
-	mu           sync.Mutex
-	sessions     map[string]*Session
-	receipts     []*Receipt
-	events       []*Event
-	escalations  map[string]*Escalation
-	consentReqs  map[string]*ConsentRequest
-	targets      map[string]*Target
-	adapters     map[string]*AdapterDoc
-	advisors     map[string]*AdvisorDoc
-	oauthClients map[string]*OAuthClient // keyed by target ID
-	oauthFlows   map[string]*OAuthFlow   // keyed by state (single-use PKCE flows)
-	oauthPending map[string]*OAuthPending // keyed by state (target-less OAuth-first slots)
-	users        map[string]*User        // keyed by user ID
-	entitlements  map[string]*Entitlement       // keyed by userID|targetID
+	mu              sync.Mutex
+	sessions        map[string]*Session
+	receipts        []*Receipt
+	events          []*Event
+	escalations     map[string]*Escalation
+	consentReqs     map[string]*ConsentRequest
+	targets         map[string]*Target
+	adapters        map[string]*AdapterDoc
+	advisors        map[string]*AdvisorDoc
+	oauthClients    map[string]*OAuthClient       // keyed by target ID
+	oauthFlows      map[string]*OAuthFlow         // keyed by state (single-use PKCE flows)
+	oauthPending    map[string]*OAuthPending      // keyed by state (target-less OAuth-first slots)
+	users           map[string]*User              // keyed by user ID
+	entitlements    map[string]*Entitlement       // keyed by userID|targetID
 	channelConns    map[string]*ChannelConnection // keyed by userID|kind
 	channelTokens   map[string]*ChannelLinkToken  // keyed by token
 	channelSettings map[string]*ChannelSetting    // keyed by kind
-	agentKeys    map[string]*AgentKey    // keyed by key ID
-	secrets      map[string][]byte       // keyed by ref; opaque sealed bytes
+	agentKeys       map[string]*AgentKey          // keyed by key ID
+	secrets         map[string][]byte             // keyed by ref; opaque sealed bytes
 }
 
 // NewMemStore returns an empty in-memory Store.
 func NewMemStore() *MemStore {
 	return &MemStore{
-		sessions:     map[string]*Session{},
-		escalations:  map[string]*Escalation{},
-		consentReqs:  map[string]*ConsentRequest{},
-		targets:      map[string]*Target{},
-		adapters:     map[string]*AdapterDoc{},
-		advisors:     map[string]*AdvisorDoc{},
-		oauthClients: map[string]*OAuthClient{},
-		oauthFlows:   map[string]*OAuthFlow{},
-		oauthPending: map[string]*OAuthPending{},
-		users:        map[string]*User{},
-		entitlements:  map[string]*Entitlement{},
+		sessions:        map[string]*Session{},
+		escalations:     map[string]*Escalation{},
+		consentReqs:     map[string]*ConsentRequest{},
+		targets:         map[string]*Target{},
+		adapters:        map[string]*AdapterDoc{},
+		advisors:        map[string]*AdvisorDoc{},
+		oauthClients:    map[string]*OAuthClient{},
+		oauthFlows:      map[string]*OAuthFlow{},
+		oauthPending:    map[string]*OAuthPending{},
+		users:           map[string]*User{},
+		entitlements:    map[string]*Entitlement{},
 		channelConns:    map[string]*ChannelConnection{},
 		channelTokens:   map[string]*ChannelLinkToken{},
 		channelSettings: map[string]*ChannelSetting{},
-		agentKeys:    map[string]*AgentKey{},
-		secrets:      map[string][]byte{},
+		agentKeys:       map[string]*AgentKey{},
+		secrets:         map[string][]byte{},
 	}
 }
 

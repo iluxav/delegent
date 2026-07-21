@@ -21,11 +21,11 @@ import (
 	"strconv"
 	"strings"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/controlplane"
 	"delegent.dev/gateway/id"
 	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // Broker holds no session state of its own — it reads and writes through the Store.

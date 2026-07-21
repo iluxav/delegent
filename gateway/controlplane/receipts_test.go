@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // TestReceipts_ChainAndSign drives record twice for the same principal and asserts the

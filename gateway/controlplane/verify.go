@@ -4,8 +4,8 @@ import (
 	"context"
 	"sort"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // ChainStatus is the protocol-level chain verdict — re-exported so platform callers (API DTOs,

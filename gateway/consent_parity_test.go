@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/introspect"
+	core "delegent.dev/protocol"
 )
 
 // Parity: the console park path must persist the SAME legible display the elicitation/widget

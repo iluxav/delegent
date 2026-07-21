@@ -9,7 +9,7 @@ import (
 func TestTokenSet_ExpiredWithSkew(t *testing.T) {
 	now := int64(1000)
 	ts := oauth.TokenSet{AccessToken: "a", ExpiresAt: 1000 + 30} // 30s left
-	if !ts.NeedsRefresh(now, 60) {                                // 60s skew → treat as expired
+	if !ts.NeedsRefresh(now, 60) {                               // 60s skew → treat as expired
 		t.Fatal("token within skew window must need refresh")
 	}
 	ts.ExpiresAt = 1000 + 120

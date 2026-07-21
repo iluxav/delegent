@@ -58,6 +58,34 @@ type Aggregate struct {
 	lastTarget map[string]string // connID → target of the last routed call (entry-tool inference)
 }
 
+// aggregateInstructions is the server-level guidance injected into the agent's context at
+// initialize time. It frames what Delegent IS, steers agents to the gateway's own tools
+// FIRST (batched consent beats per-call prompts), and teaches the denial protocol — the
+// difference between an agent that cooperates with consent and one that thrashes against it.
+// Advisory by nature: enforcement never depends on the agent reading it.
+func aggregateInstructions(services []string) string {
+	svc := "none yet — the operator adds them"
+	if len(services) > 0 {
+		svc = strings.Join(services, ", ")
+	}
+	return "Delegent is a consent gateway: every tool here reaches a real service only within what the " +
+		"user has approved, and every decision is recorded. Connected services: " + svc + ". Vendor tools " +
+		"are namespaced <service>__<tool>.\n\n" +
+		"Prefer Delegent's own tools first:\n" +
+		"- plan_access (pass {\"target\": <service>}) lists what a service can grant; request_access then asks " +
+		"the human ONCE for the bundle of capabilities your task needs. Do this up front — it replaces a " +
+		"separate approval prompt on every tool call.\n" +
+		"- Fill _delegent_intent on EVERY vendor call: one sentence, in the user's own words, on why this call " +
+		"serves their task. The human approving reads it — clear intent gets faster approvals.\n" +
+		"- A denial is the gateway working, not a bug. \"pending approval\" means a human was asked: retry " +
+		"shortly. \"not classified\" / \"cannot be granted\" means no scope can allow it: tell the user, do NOT " +
+		"retry or work around it. A vendor-outage note means your access is intact: just retry later.\n" +
+		"- Delegating to a sub-agent? narrow_access mints a strictly weaker session to hand down; escalate asks " +
+		"your parent session for more — neither grants anything by itself.\n" +
+		"- receipts shows the audit trail of decisions on this connection; revoke drops held access when your " +
+		"task is done."
+}
+
 // newAggregate assembles the user's aggregate: entitled+enabled targets only. A target whose
 // gateway fails to build is SKIPPED (logged) — one broken vendor must not take down the rest.
 func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, error) {
@@ -73,11 +101,20 @@ func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, 
 		byConnCaps: map[string]clientCaps{},
 		lastTarget: map[string]string{},
 	}
+	// the eligible service names, known before the server exists so the initialize-time
+	// instructions can teach discovery (a target that later fails to build just has no tools)
+	var included []string
+	for _, t := range ts {
+		if !t.Enabled {
+			continue
+		}
+		if _, err := r.st.GetEntitlement(ctx, userID, t.ID); err != nil {
+			continue
+		}
+		included = append(included, t.ID)
+	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "delegent", Version: "0.2.0"}, &mcp.ServerOptions{
-		Instructions: "Delegent fronts ALL your connected services on this one endpoint. Tools are named <service>__<tool>. " +
-			"Each service gates its tools behind human consent: call plan_access to see what a service can grant " +
-			"(pass {\"target\": <service>} to pick one), then request_access for the subset your task needs — " +
-			"one approval instead of a prompt per tool.",
+		Instructions: aggregateInstructions(included),
 		InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
 			caps := clientCaps{}
 			name, version := "unknown", ""

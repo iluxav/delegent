@@ -40,11 +40,11 @@ type pendingConsent struct {
 	// (built via consentHeadline) and the agent's declared intent, stashed from the originating
 	// guarded call so serveConsentToken can render the same headline the elicitation dialog shows.
 	// Empty when the request had no originating tool call (a direct request_access) — fail-soft.
-	Headline    string
-	Intent      string
-	CreatedAt   int64 // unix millis
-	ExpiresAt   int64 // unix millis
-	used        bool
+	Headline  string
+	Intent    string
+	CreatedAt int64 // unix millis
+	ExpiresAt int64 // unix millis
+	used      bool
 	// done delivers the decision to a request_access call blocked on this record. Created
 	// EXACTLY ONCE, in findOrCreate's mint branch — every copy findOrCreate/consume hands out
 	// shares this same channel, so the vendor-call-denial record and the model's follow-up

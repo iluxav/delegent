@@ -95,6 +95,15 @@ func TestStdioRoundTrip(t *testing.T) {
 	}
 	defer session.Close()
 
+	// server-level instructions must arrive at initialize: the consent-gateway framing, the
+	// delegent-tools-first steer, and the live service list for discovery
+	if ir := session.InitializeResult(); ir == nil ||
+		!strings.Contains(ir.Instructions, "consent gateway") ||
+		!strings.Contains(ir.Instructions, "request_access") ||
+		!strings.Contains(ir.Instructions, "Connected services: fake") {
+		t.Fatalf("server instructions missing or incomplete: %+v", session.InitializeResult())
+	}
+
 	// the aggregate surface: the vendor tool arrives namespaced <target>__<tool>
 	tools, err := session.ListTools(ctx, nil)
 	if err != nil {

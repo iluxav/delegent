@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/introspect"
+	core "delegent.dev/protocol"
 )
 
 // TestConsentHeadline_ActionRiskIntent: the shared headline leads with the tool's human action,

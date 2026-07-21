@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"sync"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // Store resolves and custodies per-principal root keys over a store.Store and a keyring.Sealer.

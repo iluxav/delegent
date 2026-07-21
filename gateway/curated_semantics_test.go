@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // TestLoadConfig_CuratedSemanticsWin: an adapter doc carrying a `semantics` override alongside its

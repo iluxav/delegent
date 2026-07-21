@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 func newRK(t *testing.T) (*Store, *store.MemStore) {

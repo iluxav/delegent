@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	core "delegent.dev/protocol"
 	"delegent.dev/gateway/broker"
 	"delegent.dev/gateway/controlplane"
 	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/loader"
 	"delegent.dev/gateway/rootkeys"
 	"delegent.dev/gateway/store"
+	core "delegent.dev/protocol"
 )
 
 // grantAll answers every consent dialog with GRANT on all offered scopes.

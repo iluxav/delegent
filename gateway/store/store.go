@@ -116,8 +116,8 @@ type ConsentRequest struct {
 	// markers, and the agent's declared why). Persisted so every LATER surface — the console
 	// approvals card, telegram notices — shows exactly what the dialog would have. Empty on
 	// rows that predate this field or asks with no originating tool call (fail-soft).
-	Headline string
-	Intent   string
+	Headline      string
+	Intent        string
 	Status        string   // pending | approved | denied | expired
 	DecidedScopes []string // scopes actually granted on approval (subset of Scopes)
 	TTLMinutes    int      // grant lifetime chosen at approval
