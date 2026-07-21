@@ -114,7 +114,7 @@ func drain(t *testing.T, s screen, cmd tea.Cmd) screen {
 	return s
 }
 
-func key(k string) tea.KeyMsg {
+func keyMsg(k string) tea.KeyMsg {
 	if k == " " {
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
 	}
@@ -137,7 +137,7 @@ func press(t *testing.T, s screen, keys ...string) screen {
 	t.Helper()
 	for _, k := range keys {
 		var cmd tea.Cmd
-		s, cmd = s.update(key(k))
+		s, cmd = s.update(keyMsg(k))
 		s = drain(t, s, cmd)
 	}
 	return s

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,8 +21,8 @@ type targetsScreen struct {
 	o ops
 
 	// list mode
-	rows   []targetRow
-	cursor int
+	rows []targetRow
+	tbl  table.Model
 
 	// detail mode
 	detail     *targetDetail
@@ -53,7 +54,20 @@ func newTargetsScreen(o ops) *targetsScreen {
 	ti := textinput.New()
 	ti.CharLimit = 64
 	ti.Width = 24
-	return &targetsScreen{o: o, scopeEdit: ti, newTools: map[string]bool{}}
+	tbl := newListTable([]table.Column{
+		{Title: "TARGET", Width: 16}, {Title: "STATE", Width: 8}, {Title: "TOOLS", Width: 5},
+		{Title: "CREDENTIAL", Width: 12}, {Title: "ENDPOINT", Width: 40},
+	})
+	return &targetsScreen{o: o, tbl: tbl, scopeEdit: ti, newTools: map[string]bool{}}
+}
+
+// sel returns the target under the table cursor.
+func (s *targetsScreen) sel() *targetRow {
+	i := s.tbl.Cursor()
+	if i < 0 || i >= len(s.rows) {
+		return nil
+	}
+	return &s.rows[i]
 }
 
 func (s *targetsScreen) capturing() bool { return s.editing }
@@ -84,8 +98,17 @@ func (s *targetsScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case targetsLoadedMsg:
 		s.rows = msg.rows
-		if s.cursor >= len(s.rows) {
-			s.cursor = 0
+		trows := make([]table.Row, 0, len(s.rows))
+		for _, r := range s.rows {
+			state := "enabled"
+			if !r.Enabled {
+				state = "DISABLED"
+			}
+			trows = append(trows, table.Row{r.ID, state, itoa(r.Tools), r.CredentialKind, r.Endpoint})
+		}
+		s.tbl.SetRows(trows)
+		if s.tbl.Cursor() >= len(trows) {
+			s.tbl.SetCursor(0)
 		}
 		return s, nil
 
@@ -144,30 +167,26 @@ func (s *targetsScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 
 func (s *targetsScreen) updateList(msg tea.KeyMsg) (screen, tea.Cmd) {
 	switch msg.String() {
-	case "up", "k":
-		if s.cursor > 0 {
-			s.cursor--
-		}
-	case "down", "j":
-		if s.cursor < len(s.rows)-1 {
-			s.cursor++
-		}
 	case "r":
 		return s, s.loadList()
 	case "enter":
-		if len(s.rows) > 0 {
-			return s, s.loadDetail(s.rows[s.cursor].ID)
+		if row := s.sel(); row != nil {
+			return s, s.loadDetail(row.ID)
 		}
 	case "e":
-		if len(s.rows) > 0 {
-			row := s.rows[s.cursor]
+		if row := s.sel(); row != nil {
+			id, enabled := row.ID, row.Enabled
 			return s, tea.Sequence(func() tea.Msg {
-				if err := s.o.SetTargetEnabled(context.Background(), row.ID, !row.Enabled); err != nil {
+				if err := s.o.SetTargetEnabled(context.Background(), id, !enabled); err != nil {
 					return errMsg{err}
 				}
-				return flashMsg{row.ID + " toggled"}
+				return flashMsg{id + " toggled"}
 			}, s.loadList())
 		}
+	default: // navigation (arrows, j/k, paging) belongs to the table
+		var cmd tea.Cmd
+		s.tbl, cmd = s.tbl.Update(msg)
+		return s, cmd
 	}
 	return s, nil
 }
@@ -380,13 +399,15 @@ func (s *targetsScreen) rebuildScopeRows() {
 func (s *targetsScreen) hints() string {
 	switch {
 	case s.editing:
-		return "enter set scope · esc cancel"
+		return hintBar(kb("enter", "set scope"), kb("esc", "cancel"))
 	case s.inDetail && s.pane == 0:
-		return "↑↓ tool · e effect · enter scope · u refuse · I re-introspect · s save · ←→ scopes pane · esc back"
+		return hintBar(kb("↑↓", "tool"), kb("e", "effect"), kb("enter", "scope"), kb("u", "refuse"),
+			kb("I", "re-introspect"), kb("s", "save"), kb("←→", "entitlement pane"), kb("esc", "back"))
 	case s.inDetail:
-		return "↑↓ scope · space opt-in/out · e cycle tools' effect · s save · ←→ policy pane · esc back"
+		return hintBar(kb("↑↓", "scope"), kb("space", "opt-in/out"), kb("e", "cycle effect"),
+			kb("s", "save"), kb("←→", "policy pane"), kb("esc", "back"))
 	default:
-		return "↑↓ select · enter open · e enable/disable · r reload"
+		return hintBar(kb("↑↓", "select"), kb("enter", "open"), kb("e", "enable/disable"), kb("r", "reload"))
 	}
 }
 
@@ -397,24 +418,17 @@ func (s *targetsScreen) view(width, height int) string {
 	if len(s.rows) == 0 {
 		return styDim.Render("\n  no targets — add one with 'delegent target add'")
 	}
-	var b strings.Builder
-	endpointW := width - 52
+	endpointW := width - 55
 	if endpointW < 16 {
 		endpointW = 16
 	}
-	b.WriteString("  " + styHead.Render(padCell("TARGET", 16)+" "+padCell("STATE", 8)+" "+padCell("TOOLS", 5)+" "+padCell("CREDENTIAL", 12)+" "+"ENDPOINT") + "\n")
-	for i, r := range s.rows {
-		state, stateSty := "enabled", styStatusOK
-		if !r.Enabled {
-			state, stateSty = "DISABLED", styStatusOff
-		}
-		cells := padCell(r.ID, 16) + " " + stateSty.Render(padCell(state, 8)) + " " + padCell(itoa(r.Tools), 5) + " " + padCell(r.CredentialKind, 12) + " " + truncate(r.Endpoint, endpointW)
-		if i == s.cursor {
-			cells = styCursor.Render(padCell(r.ID, 16) + " " + padCell(state, 8) + " " + padCell(itoa(r.Tools), 5) + " " + padCell(r.CredentialKind, 12) + " " + truncate(r.Endpoint, endpointW))
-		}
-		b.WriteString("  " + cells + "\n")
-	}
-	return b.String()
+	s.tbl.SetColumns([]table.Column{
+		{Title: "TARGET", Width: 16}, {Title: "STATE", Width: 8}, {Title: "TOOLS", Width: 5},
+		{Title: "CREDENTIAL", Width: 12}, {Title: "ENDPOINT", Width: endpointW},
+	})
+	s.tbl.SetWidth(width - 2)
+	s.tbl.SetHeight(min(height-1, len(s.rows)+2))
+	return "\n" + s.tbl.View()
 }
 
 func (s *targetsScreen) viewDetail(width, height int) string {
@@ -429,9 +443,9 @@ func (s *targetsScreen) viewDetail(width, height int) string {
 	paneNames := []string{"Tool policy", "Operator entitlement"}
 	for i, n := range paneNames {
 		if i == s.pane {
-			b.WriteString(styTabActive.Render(n))
+			b.WriteString(styPaneOn.Render(n))
 		} else {
-			b.WriteString(styTab.Render(n))
+			b.WriteString(styDim.Render("  " + n + "  "))
 		}
 	}
 	b.WriteString("\n\n")

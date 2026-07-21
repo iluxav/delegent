@@ -205,12 +205,13 @@ func (s *alertsScreen) resolve(row alertRow, approve bool, granted []string) tea
 
 func (s *alertsScreen) hints() string {
 	if s.deciding {
-		return "space toggle scope · t TTL · b budget · enter approve · esc cancel"
+		return hintBar(kb("space", "toggle scope"), kb("t", "TTL"), kb("b", "budget"),
+			kb("enter", "approve"), kb("esc", "cancel"))
 	}
 	if !s.live {
-		return "offline: view-only (start the gateway to approve) · r reload"
+		return styDim.Render("offline: view-only (start the gateway to approve)") + " " + hintBar(kb("r", "reload"))
 	}
-	return "↑↓ select · a approve · d deny · r reload"
+	return hintBar(kb("↑↓", "select"), kb("a", "approve"), kb("d", "deny"), kb("r", "reload"))
 }
 
 // cleanWarning tidies engine over-ask text for display (an empty inferred-needs list renders

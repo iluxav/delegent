@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -18,7 +19,7 @@ type auditScreen struct {
 	live bool
 
 	events []*store.Event
-	cursor int
+	tbl    table.Model
 
 	filtering bool
 	filter    textinput.Model
@@ -35,7 +36,27 @@ func newAuditScreen(o ops, live bool) *auditScreen {
 	ti.Placeholder = "filter: key, target, tool, type, or decision"
 	ti.CharLimit = 48
 	ti.Width = 40
-	return &auditScreen{o: o, live: live, filter: ti}
+	tbl := newListTable([]table.Column{
+		{Title: "TIME", Width: 14}, {Title: "TYPE", Width: 20}, {Title: "KEY", Width: 10},
+		{Title: "TARGET", Width: 14}, {Title: "TOOL", Width: 24}, {Title: "DECISION", Width: 10},
+	})
+	return &auditScreen{o: o, live: live, tbl: tbl, filter: ti}
+}
+
+// syncRows mirrors the current visible events into the table, keeping the cursor sane.
+func (s *auditScreen) syncRows() {
+	rows := s.visible()
+	trows := make([]table.Row, 0, len(rows))
+	for _, e := range rows {
+		trows = append(trows, table.Row{
+			time.UnixMilli(e.CreatedAt).Format("Jan02 15:04:05"), e.Type,
+			e.KeyName, e.TargetID, e.Tool, e.Decision,
+		})
+	}
+	s.tbl.SetRows(trows)
+	if len(trows) > 0 && (s.tbl.Cursor() < 0 || s.tbl.Cursor() >= len(trows)) {
+		s.tbl.SetCursor(0)
+	}
 }
 
 func (s *auditScreen) capturing() bool { return s.filtering || s.expanded }
@@ -82,9 +103,7 @@ func (s *auditScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case eventsLoadedMsg:
 		s.events = msg.events
-		if s.cursor >= len(s.visible()) {
-			s.cursor = 0
-		}
+		s.syncRows()
 		return s, nil
 
 	case auditTickMsg:
@@ -100,7 +119,8 @@ func (s *auditScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 			case "enter":
 				s.query = strings.TrimSpace(s.filter.Value())
 				s.filtering = false
-				s.cursor = 0
+				s.tbl.SetCursor(0)
+				s.syncRows()
 			case "esc":
 				s.filtering = false
 			default:
@@ -117,14 +137,6 @@ func (s *auditScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, nil
 		}
 		switch msg.String() {
-		case "up", "k":
-			if s.cursor > 0 {
-				s.cursor--
-			}
-		case "down", "j":
-			if s.cursor < len(s.visible())-1 {
-				s.cursor++
-			}
 		case "/":
 			s.filtering = true
 			s.filter.SetValue(s.query)
@@ -132,13 +144,18 @@ func (s *auditScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, textinput.Blink
 		case "c":
 			s.query = ""
-			s.cursor = 0
+			s.tbl.SetCursor(0)
+			s.syncRows()
 		case "r":
 			return s, s.load()
 		case "enter":
 			if len(s.visible()) > 0 {
 				s.expanded = true
 			}
+		default:
+			var cmd tea.Cmd
+			s.tbl, cmd = s.tbl.Update(msg)
+			return s, cmd
 		}
 	}
 	return s, nil
@@ -147,51 +164,32 @@ func (s *auditScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 func (s *auditScreen) hints() string {
 	switch {
 	case s.filtering:
-		return "enter apply · esc cancel"
+		return hintBar(kb("enter", "apply"), kb("esc", "cancel"))
 	case s.expanded:
-		return "enter/esc close"
+		return hintBar(kb("esc", "close"))
 	default:
-		return "↑↓ select · enter detail · / filter · c clear · r reload"
+		return hintBar(kb("↑↓", "select"), kb("enter", "detail"), kb("/", "filter"), kb("c", "clear"), kb("r", "reload"))
 	}
 }
 
 func (s *auditScreen) view(width, height int) string {
 	rows := s.visible()
-	if s.expanded && s.cursor < len(rows) {
-		return s.viewExpanded(rows[s.cursor])
+	if s.expanded && s.tbl.Cursor() < len(rows) {
+		return modal(width, height, s.viewExpanded(rows[s.tbl.Cursor()]))
 	}
 	var b strings.Builder
 	if s.filtering {
-		b.WriteString("  " + s.filter.View() + "\n\n")
+		b.WriteString("  " + s.filter.View() + "\n")
 	} else if s.query != "" {
-		b.WriteString(styDim.Render("  filter: "+s.query+" (c to clear)") + "\n\n")
+		b.WriteString(styDim.Render("  filter: "+s.query+" (c to clear)") + "\n")
 	}
 	if len(rows) == 0 {
 		b.WriteString(styDim.Render("\n  no events yet"))
 		return b.String()
 	}
-	b.WriteString("  " + styHead.Render(padCell("TIME", 14)+" "+padCell("TYPE", 20)+" "+padCell("KEY", 10)+" "+padCell("TARGET", 14)+" "+padCell("TOOL", 24)+" "+"DECISION") + "\n")
-	limit := height - 4
-	if limit < 3 {
-		limit = 3
-	}
-	for i, e := range rows {
-		if i >= limit {
-			b.WriteString(styDim.Render(fmt.Sprintf("  … %d more (filter to narrow)", len(rows)-limit)) + "\n")
-			break
-		}
-		ts := time.UnixMilli(e.CreatedAt).Format("Jan02 15:04:05")
-		bad := e.Decision == "deny" || e.Type == store.EventPermissionDenied || e.Type == store.EventError
-		plain := padCell(ts, 14) + " " + padCell(e.Type, 20) + " " + padCell(e.KeyName, 10) + " " + padCell(e.TargetID, 14) + " " + padCell(e.Tool, 24) + " "
-		line := plain + e.Decision
-		if bad {
-			line = plain + styErr.Render(e.Decision)
-		}
-		if i == s.cursor {
-			line = styCursor.Render(plain + e.Decision)
-		}
-		b.WriteString("  " + line + "\n")
-	}
+	s.tbl.SetWidth(width - 2)
+	s.tbl.SetHeight(min(height-2, len(rows)+2))
+	b.WriteString(s.tbl.View())
 	return b.String()
 }
 
@@ -221,5 +219,5 @@ func (s *auditScreen) viewExpanded(e *store.Event) string {
 		body += "\n" + styErr.Render("error: "+e.Error)
 	}
 	body += "\n\nparams:\n  " + pretty(e.Params) + "\n\nresult:\n  " + pretty(e.Result)
-	return styBox.Render(body)
+	return body
 }

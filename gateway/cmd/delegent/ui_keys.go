@@ -6,14 +6,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type keysScreen struct {
-	o      ops
-	rows   []keyRow
-	cursor int
+	o    ops
+	rows []keyRow
+	tbl  table.Model
 
 	naming    bool // mint: name prompt active
 	nameInput textinput.Model
@@ -41,7 +42,19 @@ func newKeysScreen(o ops) *keysScreen {
 	ti.Placeholder = "key name (e.g. laptop)"
 	ti.CharLimit = 48
 	ti.Width = 32
-	return &keysScreen{o: o, nameInput: ti}
+	tbl := newListTable([]table.Column{
+		{Title: "ID", Width: 24}, {Title: "PREFIX", Width: 10}, {Title: "NAME", Width: 14},
+		{Title: "STATE", Width: 8}, {Title: "CONSENT", Width: 16}, {Title: "LAST USED", Width: 14},
+	})
+	return &keysScreen{o: o, tbl: tbl, nameInput: ti}
+}
+
+func (s *keysScreen) sel() *keyRow {
+	i := s.tbl.Cursor()
+	if i < 0 || i >= len(s.rows) {
+		return nil
+	}
+	return &s.rows[i]
 }
 
 func (s *keysScreen) capturing() bool {
@@ -86,8 +99,21 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case keysLoadedMsg:
 		s.rows = msg.rows
-		if s.cursor >= len(s.rows) {
-			s.cursor = 0
+		trows := make([]table.Row, 0, len(s.rows))
+		for _, k := range s.rows {
+			state := "active"
+			if k.RevokedAt != 0 {
+				state = "REVOKED"
+			}
+			last := "never"
+			if k.LastUsedAt != 0 {
+				last = time.UnixMilli(k.LastUsedAt).Format("Jan 02 15:04")
+			}
+			trows = append(trows, table.Row{k.ID, k.Prefix + "…", k.Name, state, presetLabel(k.ConsentChannels), last})
+		}
+		s.tbl.SetRows(trows)
+		if s.tbl.Cursor() >= len(trows) {
+			s.tbl.SetCursor(0)
 		}
 		return s, nil
 
@@ -121,14 +147,6 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 			return s.updatePicking(msg)
 		}
 		switch msg.String() {
-		case "up", "k":
-			if s.cursor > 0 {
-				s.cursor--
-			}
-		case "down", "j":
-			if s.cursor < len(s.rows)-1 {
-				s.cursor++
-			}
 		case "r":
 			return s, s.load()
 		case "n":
@@ -148,13 +166,17 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 			if s.active() != nil {
 				s.picking = true
 				s.pickIdx = 0
-				cur := strings.Join(s.rows[s.cursor].ConsentChannels, ",")
+				cur := strings.Join(s.sel().ConsentChannels, ",")
 				for i, pz := range consentPresets {
 					if strings.Join(pz.channels, ",") == cur {
 						s.pickIdx = i
 					}
 				}
 			}
+		default:
+			var cmd tea.Cmd
+			s.tbl, cmd = s.tbl.Update(msg)
+			return s, cmd
 		}
 	}
 	return s, nil
@@ -162,14 +184,11 @@ func (s *keysScreen) update(msg tea.Msg) (screen, tea.Cmd) {
 
 // active returns the selected key if it is usable for revoke/roll (not already revoked).
 func (s *keysScreen) active() *keyRow {
-	if len(s.rows) == 0 {
+	k := s.sel()
+	if k == nil || k.RevokedAt != 0 {
 		return nil
 	}
-	k := s.rows[s.cursor]
-	if k.RevokedAt != 0 {
-		return nil
-	}
-	return &k
+	return k
 }
 
 func (s *keysScreen) updateNaming(msg tea.KeyMsg) (screen, tea.Cmd) {
@@ -210,7 +229,7 @@ func (s *keysScreen) updatePicking(msg tea.KeyMsg) (screen, tea.Cmd) {
 		}
 	case "enter":
 		s.picking = false
-		k := s.rows[s.cursor]
+		k := *s.sel()
 		channels := consentPresets[s.pickIdx].channels
 		label := consentPresets[s.pickIdx].label
 		return s, func() tea.Msg {
@@ -228,7 +247,7 @@ func (s *keysScreen) updateConfirm(msg tea.KeyMsg) (screen, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		s.confirm = ""
-		k := s.rows[s.cursor]
+		k := *s.sel()
 		if verb == "revoke" {
 			return s, tea.Sequence(func() tea.Msg {
 				if err := s.o.RevokeKey(context.Background(), k.ID); err != nil {
@@ -253,15 +272,16 @@ func (s *keysScreen) updateConfirm(msg tea.KeyMsg) (screen, tea.Cmd) {
 func (s *keysScreen) hints() string {
 	switch {
 	case s.plaintext != "":
-		return "copy the key, then enter/esc to dismiss"
+		return hintBar(kb("enter", "dismiss (copy it first!)"))
 	case s.naming:
-		return "enter mint · esc cancel"
+		return hintBar(kb("enter", "mint"), kb("esc", "cancel"))
 	case s.confirm != "":
-		return "y confirm " + s.confirm + " · any other key cancels"
+		return hintBar(kb("y", "confirm "+s.confirm), kb("esc", "cancel"))
 	case s.picking:
-		return "↑↓ preset · enter set · esc cancel"
+		return hintBar(kb("↑↓", "preset"), kb("enter", "set"), kb("esc", "cancel"))
 	default:
-		return "↑↓ select · n new · R roll · x revoke · c consent · r reload"
+		return hintBar(kb("↑↓", "select"), kb("n", "new"), kb("R", "roll"), kb("x", "revoke"),
+			kb("c", "consent"), kb("r", "reload"))
 	}
 }
 
@@ -275,49 +295,37 @@ func presetHint(channels []string) string {
 
 func (s *keysScreen) view(width, height int) string {
 	if s.plaintext != "" {
-		return styBox.Render(fmt.Sprintf("agent key %q — shown ONCE, copy it now:\n\n  %s\n\nupdate your MCP client config, then press enter", s.plainName, styBold.Render(s.plaintext)))
+		return modal(width, height, fmt.Sprintf(
+			"agent key %q — shown ONCE, copy it now:\n\n  %s\n\nupdate your MCP client config, then press enter",
+			s.plainName, styBold.Render(s.plaintext)))
 	}
-	var b strings.Builder
 	if s.naming {
-		b.WriteString("  mint new key — " + s.nameInput.View() + "\n\n")
+		return modal(width, height, "mint a new agent key\n\n"+s.nameInput.View()+"\n\n"+styDim.Render("enter mint · esc cancel"))
 	}
 	if s.confirm != "" {
-		k := s.rows[s.cursor]
-		b.WriteString(styStatusOff.Render(fmt.Sprintf("  %s %s (%s)? y/n", s.confirm, k.ID, k.Name)) + "\n\n")
+		k := s.sel()
+		return modal(width, height, fmt.Sprintf("%s %s (%s)?\n\n%s", s.confirm, k.ID, k.Name,
+			styDim.Render("y confirm · any other key cancels")))
 	}
-	if len(s.rows) == 0 {
-		b.WriteString(styDim.Render("\n  no agent keys — press n to mint one"))
-		return b.String()
-	}
-	b.WriteString("  " + styHead.Render(padCell("ID", 24)+" "+padCell("PREFIX", 10)+" "+padCell("NAME", 12)+" "+padCell("STATE", 8)+" "+padCell("CONSENT", 16)+" "+"LAST USED") + "\n")
-	for i, k := range s.rows {
-		state, stateSty := "active", styStatusOK
-		if k.RevokedAt != 0 {
-			state, stateSty = "REVOKED", styErr
-		}
-		last := "never"
-		if k.LastUsedAt != 0 {
-			last = time.UnixMilli(k.LastUsedAt).Format("Jan 02 15:04")
-		}
-		plainCells := padCell(k.ID, 24) + " " + padCell(k.Prefix+"…", 10) + " " + padCell(k.Name, 12)
-		line := plainCells + " " + stateSty.Render(padCell(state, 8)) + " " + padCell(presetLabel(k.ConsentChannels), 16) + " " + last
-		if i == s.cursor {
-			line = styCursor.Render(plainCells + " " + padCell(state, 8) + " " + padCell(presetLabel(k.ConsentChannels), 16) + " " + last)
-		}
-		b.WriteString("  " + line + "\n")
-		if s.picking && i == s.cursor {
-			for j, pz := range consentPresets {
-				mark := "  "
-				if j == s.pickIdx {
-					mark = "▸ "
-				}
-				row := fmt.Sprintf("      %s%-14s %s", mark, pz.label, styDim.Render(presetHint(pz.channels)))
-				if j == s.pickIdx {
-					row = styCursor.Render(row)
-				}
-				b.WriteString(row + "\n")
+	if s.picking {
+		var b strings.Builder
+		k := s.sel()
+		b.WriteString("consent channel for " + styBold.Render(k.Name) + "\n\n")
+		for j, pz := range consentPresets {
+			line := padCell(pz.label, 16) + styDim.Render(presetHint(pz.channels))
+			if j == s.pickIdx {
+				line = styPaneOn.Render(padCell(pz.label, 16)) + styDim.Render(presetHint(pz.channels))
 			}
+			b.WriteString(line + "\n")
 		}
+		b.WriteString("\n" + styDim.Render("↑↓ preset · enter set · esc cancel"))
+		return modal(width, height, b.String())
 	}
-	return b.String()
+
+	if len(s.rows) == 0 {
+		return styDim.Render("\n  no agent keys — press n to mint one")
+	}
+	s.tbl.SetWidth(width - 2)
+	s.tbl.SetHeight(min(height-1, len(s.rows)+2))
+	return "\n" + s.tbl.View()
 }
