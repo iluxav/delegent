@@ -1,137 +1,85 @@
+{{define "brandMark"}}<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M7 6h9a10 10 0 0 1 0 20H7V6Z" stroke="currentColor" stroke-width="2.5"/><path d="M3 12h12m-12 8h12m-3-12 4 4-4 4m0 0 4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
 {{define "page"}}<!doctype html>
 <html lang="en" class="h-full">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Delegent</title>
+<meta name="description" content="Manage MCP servers, review tool permissions, and approve agent requests with Delegent.">
+<title>Delegent · Gateway</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js"></script>
+<script src="/static/app.js" defer></script>
 </head>
-<body class="h-full overflow-hidden bg-paper font-sans text-sm text-ink antialiased">
-<div class="flex h-full">
-  <aside id="side" class="flex shrink-0 flex-col bg-panel" style="width:20rem">
-    <div class="flex items-baseline justify-between px-4 pt-4 pb-3">
-      <h1 class="text-base font-semibold tracking-tight"><a href="/" hx-boost="true">Delegent</a></h1>
-      <span class="text-xs text-ink-faint">{{.Version}}</span>
-    </div>
+<body class="dashboard bg-paper font-sans text-sm text-ink antialiased" hx-history="false">
+<a class="skip-link" href="#main">Skip to workspace</a>
+<div class="app-shell">
+  <aside id="side" class="server-sidebar" aria-label="MCP servers">
+    <div class="sidebar-brand"><a class="brand" href="/">{{template "brandMark"}}<span>Delegent<small>GATEWAY</small></span></a><button class="btn sidebar-close" type="button" data-panel-toggle="side" aria-label="Close server navigation">×</button></div>
     <div id="targets" class="flex min-h-0 flex-1 flex-col" hx-get="/targets?s={{.Selected}}" hx-trigger="targets from:body" hx-swap="innerHTML">
       {{template "sidebarTargets" .}}
     </div>
-    <div class="flex items-center justify-between border-t border-line px-4 py-3 text-xs text-ink-soft">
-      <span>{{.User}}</span>
-      <form method="post" action="/logout"><button class="hover:text-ink">Sign out</button></form>
+    <div class="sidebar-footer">
+      <div class="operator"><span class="operator-avatar" aria-hidden="true">{{template "brandMark"}}</span><span class="min-w-0"><span class="block truncate font-medium">{{.User}}</span><span class="text-xs text-ink-faint">Operator · {{.Version}}</span></span></div>
+      <form method="post" action="/logout"><button class="text-button" type="submit">Sign out</button></form>
     </div>
   </aside>
-  <div class="grip" data-resize="side" data-edge="left" title="Drag to resize"></div>
-  <main id="main" class="flex min-w-0 flex-1 flex-col overflow-y-auto">
-    {{.Main}}
-  </main>
-  <div class="grip" data-resize="connect" data-edge="right" title="Drag to resize"></div>
-  <aside id="connect" class="flex shrink-0 flex-col bg-panel" style="width:26rem"
-         hx-get="/connect" hx-trigger="keys from:body" hx-swap="innerHTML">
-    {{.Connect}}
-  </aside>
+  <div class="grip" data-resize="side" data-edge="left" role="separator" tabindex="0" aria-label="Resize server sidebar" aria-orientation="vertical" aria-valuemin="224" aria-valuemax="360" aria-valuenow="248"></div>
+  <div class="workspace">
+    <header class="workspace-bar">
+      <button class="btn mobile-menu" type="button" data-panel-toggle="side" aria-controls="side" aria-expanded="false">Servers</button>
+      <div class="workspace-label"><span class="status-dot" aria-hidden="true"></span>Local gateway<span class="workspace-divider">/</span><span class="text-ink-faint">Workspace</span></div>
+      <button class="btn connect-toggle" type="button" data-panel-toggle="connect" aria-controls="connect" aria-expanded="false"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7 3v4m6-4v4M5 7h10v2a5 5 0 0 1-5 5v3M3 7h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Connect an agent</button>
+    </header>
+    <main id="main" tabindex="-1">{{.Main}}</main>
+  </div>
+  <div class="grip connect-grip" data-resize="connect" data-edge="right" role="separator" tabindex="0" aria-label="Resize connection panel" aria-orientation="vertical" aria-valuemin="320" aria-valuemax="480" aria-valuenow="360"></div>
+  <aside id="connect" class="connection-panel" aria-label="Connect an agent" hx-get="/connect" hx-trigger="keys from:body" hx-swap="innerHTML">{{.Connect}}</aside>
 </div>
-<div id="consentpop" hx-get="/consents/live" hx-include="#pkn" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
-<script>
-  // A blocked agent should be visible from a background tab too.
-  document.body.addEventListener('htmx:afterSwap', function (e) {
-    if (e.target && e.target.id === 'consentpop') {
-      var n = e.target.querySelectorAll('form[hx-post^="/consents/"]').length;
-      document.title = n ? '(' + n + ') Delegent — approval needed' : 'Delegent';
-    }
-  });
-
-  // Panes resize by dragging the grip beside them; each width is remembered per browser.
-  document.querySelectorAll('.grip').forEach(function (grip) {
-    var pane = document.getElementById(grip.dataset.resize), right = grip.dataset.edge === 'right';
-    try { var saved = localStorage.getItem('delegent.' + grip.dataset.resize); if (saved) pane.style.width = saved + 'px'; } catch (e) {}
-    grip.addEventListener('mousedown', function (e) {
-      e.preventDefault();
-      var x0 = e.clientX, w0 = pane.getBoundingClientRect().width;
-      function move(ev) {
-        var d = right ? x0 - ev.clientX : ev.clientX - x0;
-        pane.style.width = Math.min(Math.max(w0 + d, 224), 720) + 'px';
-      }
-      function up() {
-        document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
-        document.body.classList.remove('resizing');
-        try { localStorage.setItem('delegent.' + grip.dataset.resize, Math.round(pane.getBoundingClientRect().width)); } catch (e) {}
-      }
-      document.body.classList.add('resizing');
-      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
-    });
-  });
-
-  // Delegated, so it keeps working after htmx swaps a pane's contents.
-  document.addEventListener('change', function (e) {
-    var el = e.target;
-    if (el.matches && el.matches('select[data-fx]')) el.className = el.className.replace(/\bfx-\w+/, 'fx-' + el.value);
-  });
-  document.addEventListener('click', function (e) {
-    var tab = e.target.closest('.ctab');
-    if (tab) {
-      var root = tab.closest('#connect');
-      root.querySelectorAll('.ctab').forEach(function (t) { t.classList.toggle('ctab-on', t === tab); });
-      root.querySelectorAll('.client-pane').forEach(function (p) { p.classList.toggle('hidden', p.dataset.client !== tab.dataset.client); });
-      return;
-    }
-    var copy = e.target.closest('[data-copy]');
-    if (copy) {
-      var src = document.querySelector(copy.dataset.copy);
-      if (!src) return;
-      var text = src.textContent, done = function () { var was = copy.textContent; copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = was; }, 1200); };
-      // clipboard API needs a secure context; localhost qualifies, a LAN address does not.
-      if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done); return; }
-      var ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); done(); } finally { ta.remove(); }
-    }
-  });
-</script>
+<button class="panel-backdrop" type="button" data-close-panels aria-label="Close panel" hidden></button>
+<div id="toast" class="toast" role="status" hidden></div>
+<div id="consentpop" hx-get="/consents/live" hx-include="#pkn" hx-trigger="load, every 2s" hx-swap="innerHTML"><input type="hidden" id="pkn" name="known" value=""></div>
+<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+  <form method="dialog"><span class="eyebrow">Please confirm</span><h2 id="confirm-title">Continue with this change?</h2><p id="confirm-message"></p><div class="dialog-actions"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn btn-primary" id="confirm-action" value="confirm">Continue</button></div></form>
+</dialog>
+<dialog id="tool-description-dialog" class="tool-description-dialog" aria-labelledby="tool-description-title">
+  <header class="tool-description-header"><div class="min-w-0"><span class="eyebrow">Tool description</span><h2 id="tool-description-title" tabindex="-1" autofocus></h2></div><form method="dialog"><button class="btn tool-description-close" aria-label="Close tool description" title="Close"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></form></header>
+  <div id="tool-description-content" class="tool-description-content" tabindex="0" role="region" aria-label="Full tool description"></div>
+</dialog>
 </body>
 </html>{{end}}
 
 {{define "sidebarTargets"}}
-<nav class="min-h-0 flex-1 overflow-y-auto px-2">
+<div class="sidebar-heading"><span class="eyebrow">MCP servers</span><span class="count">{{len .Targets}}</span></div>
+{{if .Targets}}<div class="server-search"><input type="search" class="input search-input" id="server-search" placeholder="Find a server…" aria-label="Find a server" autocomplete="off"></div>{{end}}
+<nav class="server-list" aria-label="Servers">
   {{range .Targets}}
-  <a href="/targets/{{.ID}}" hx-get="/targets/{{.ID}}" hx-target="#main" hx-push-url="true"
-     class="mb-0.5 flex items-start gap-2.5 rounded-md px-2 py-2 hover:bg-paper {{if eq $.Selected .ID}}bg-accent-soft hover:bg-accent-soft{{end}}">
-    <span class="mt-1.5 size-2 shrink-0 rounded-full {{if .Enabled}}bg-ok{{else}}border border-ink-faint{{end}}" title="{{if .Enabled}}enabled{{else}}disabled{{end}}"></span>
-    <span class="min-w-0 flex-1">
-      <span class="flex items-baseline gap-2">
-        <span class="truncate font-medium">{{.Name}}</span>
-        <span class="shrink-0 text-[11px] text-ink-faint">{{.Tools}} tools</span>
-      </span>
-      <span class="block truncate font-mono text-[11px] text-ink-soft">{{.Endpoint}}</span>
-    </span>
+  <a href="/targets/{{.ID}}" hx-get="/targets/{{.ID}}" hx-target="#main" hx-push-url="true" data-server="{{.ID}}" class="server-link {{if eq $.Selected .ID}}is-active{{end}}" {{if eq $.Selected .ID}}aria-current="page"{{end}}>
+    <span class="server-symbol" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="6" rx="1.5" stroke="currentColor" stroke-width="1.4"/><rect x="3" y="11" width="14" height="6" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M6 6h.01M6 14h.01m3-8h5m-5 8h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+    <span class="min-w-0 flex-1"><span class="server-name">{{.Name}}</span><span class="server-meta">{{.Tools}} tools <span aria-hidden="true">·</span> {{if .Enabled}}Enabled{{else}}Disabled{{end}}</span><span class="server-endpoint" title="{{.Endpoint}}">{{.Endpoint}}</span></span>
+    <span class="server-status {{if .Enabled}}is-enabled{{end}}" title="{{if .Enabled}}Enabled{{else}}Disabled{{end}}"></span>
   </a>
-  {{else}}
-  <p class="px-2 py-3 text-ink-soft">No MCP servers yet.</p>
-  {{end}}
+  {{else}}<div class="sidebar-empty"><p>No servers connected</p><span>Add your first server to start reviewing its tools.</span></div>{{end}}
+  <p id="server-no-results" class="sidebar-empty" hidden>No matching servers.</p>
 </nav>
-<div class="px-3 pb-3">
-  <a href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true" class="btn w-full justify-center {{if eq .Selected "new"}}btn-primary{{end}}">Add MCP server</a>
-</div>
+<div class="sidebar-add"><a href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true" class="btn w-full justify-center {{if eq .Selected "new"}}btn-primary{{end}}"><span aria-hidden="true">+</span> Add MCP server</a></div>
 {{end}}
 
 {{define "empty"}}
-<div class="flex flex-1 items-center justify-center p-8">
-  <div class="max-w-md">
-    {{if .Gone}}
-    <h2 class="text-lg font-semibold">{{.Gone}} removed</h2>
-    <p class="mt-2 text-ink-soft">Its policy, scopes and credential are gone, and agents no longer see its tools. What ran through it is still in the activity log.</p>
-    {{else if .Missing}}
-    <h2 class="text-lg font-semibold">No target named {{.Missing}}</h2>
-    <p class="mt-2 text-ink-soft">Pick one on the left, or add it.</p>
-    {{else if .Count}}
-    <h2 class="text-lg font-semibold">Pick a server to review</h2>
-    <p class="mt-2 text-ink-soft">Each server's policy is the mapping from its tools to an effect and a scope. Agents can only be granted scopes you leave on, and a tool with no effect is refused until you classify it.</p>
-    {{else}}
-    <h2 class="text-lg font-semibold">Add your first MCP server</h2>
-    <p class="mt-2 text-ink-soft">Delegent introspects it, drafts a policy per tool, and puts every call behind consent. You review the draft here.</p>
-    {{end}}
-  </div>
+<div class="empty-workspace">
+  <div class="gateway-path" aria-hidden="true"><span class="path-node">Agent</span><span class="path-line"></span><span class="path-gateway">{{template "brandMark"}}</span><span class="path-line"></span><span class="path-node">MCP server</span></div>
+  <span class="eyebrow">Your gateway, your permissions</span>
+  {{if .Gone}}
+  <h2>{{.Gone}} removed</h2><p>Its policy, scopes and credential are gone, and agents no longer see its tools. The activity log is still available.</p>
+  {{else if .Missing}}
+  <h2>No target named {{.Missing}}</h2><p>Choose a server from the sidebar, or add a new one.</p>
+  {{else if .Count}}
+  <h2>A clear view of what agents can do.</h2><p>Choose a server to review its tools, set permissions, and see every request that passes through your gateway.</p>
+  <button class="btn btn-primary mt-6" type="button" data-focus-servers>Choose a server <span aria-hidden="true">↗</span></button>
+  {{else}}
+  <h2>Your agents. Your rules.</h2><p>Connect an MCP server to review its tools and decide what your agents can access. Every tool starts with a policy you control.</p>
+  {{end}}
+  {{if not .Count}}<a href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true" class="btn btn-primary mt-6">+ Add MCP server</a>{{end}}
+  <div class="getting-started"><div><span>01</span><strong>Connect a server</strong><p>Add its MCP endpoint.</p></div><div><span>02</span><strong>Review permissions</strong><p>Classify tools and scopes.</p></div><div><span>03</span><strong>Connect your agent</strong><p>Approve access as it works.</p></div></div>
 </div>
 {{end}}

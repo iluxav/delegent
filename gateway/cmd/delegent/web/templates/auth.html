@@ -3,17 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Delegent</title>
+<title>Delegent · Gateway access</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 </head>
-<body class="flex h-full items-center justify-center bg-paper p-4 font-sans text-sm text-ink antialiased">
+<body class="auth-page font-sans text-sm text-ink antialiased">
+<main class="auth-wrap"><a href="/" class="brand">{{template "brandMark"}}<span>Delegent<small>GATEWAY</small></span></a>
 {{end}}
 
 {{define "setup"}}{{template "authShell"}}
-<form method="post" action="/setup" class="w-full max-w-sm rounded-lg border border-line bg-panel p-6">
+<form method="post" action="/setup" class="auth-card">
   <h1 class="text-lg font-semibold">Set up the dashboard</h1>
   <p class="mt-1 text-ink-soft">A six-digit code was just printed in the terminal running <code>delegent serve</code>. Enter it to prove this is your machine, then choose how you will sign in from now on.</p>
-  {{if .Error}}<p class="mt-4 rounded-md bg-bad-soft px-3 py-2 text-bad">{{.Error}}</p>{{end}}
+  {{if .Error}}<p class="mt-4 rounded-md bg-bad-soft px-3 py-2 text-bad" role="alert">{{.Error}}</p>{{end}}
   <label class="mt-5 block font-medium" for="code">Code from the terminal</label>
   <!-- No maxlength: Safari drops a paste that exceeds it, and a code copied from the terminal
        often carries a trailing space or newline. Trim as you type; the server trims too. -->
@@ -21,18 +23,19 @@
   <label class="mt-4 block font-medium" for="username">Username</label>
   <input class="input mt-1" id="username" name="username" value="{{.Username}}" autocomplete="username" required>
   <label class="mt-4 block font-medium" for="password">Password</label>
-  <input class="input mt-1" id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
-  <label class="mt-4 block font-medium" for="confirm">Password again</label>
+  <input class="input mt-1" id="password" name="password" type="password" autocomplete="new-password" minlength="8" aria-describedby="password-help" required><p id="password-help" class="mt-1 text-xs text-ink-faint">Use at least 8 characters.</p>
+  <label class="mt-4 block font-medium" for="confirm">Confirm password</label>
   <input class="input mt-1" id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
   <button class="btn btn-primary mt-6 w-full justify-center" type="submit">Create login</button>
 </form>
+<p class="auth-caption">Your servers. Your permissions. Your gateway.</p></main>
 </body></html>{{end}}
 
 {{define "login"}}{{template "authShell"}}
-<form method="post" action="/login" class="w-full max-w-sm rounded-lg border border-line bg-panel p-6">
+<form method="post" action="/login" class="auth-card">
   {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
-  <h1 class="text-lg font-semibold">Sign in</h1>
-  {{if .Error}}<p class="mt-4 rounded-md bg-bad-soft px-3 py-2 text-bad">{{.Error}}</p>{{end}}
+  <h1>Welcome back</h1><p class="mt-2 text-ink-soft">Sign in to your gateway workspace.</p>
+  {{if .Error}}<p class="mt-4 rounded-md bg-bad-soft px-3 py-2 text-bad" role="alert">{{.Error}}</p>{{end}}
   <label class="mt-5 block font-medium" for="username">Username</label>
   <input class="input mt-1" id="username" name="username" value="{{.Username}}" autocomplete="username" required autofocus>
   <label class="mt-4 block font-medium" for="password">Password</label>
@@ -40,10 +43,11 @@
   <button class="btn btn-primary mt-6 w-full justify-center" type="submit">Sign in</button>
   <p class="mt-4 text-xs text-ink-faint">Forgot it? Delete <code>.auth</code> in the delegent home and restart serve to set up again.</p>
 </form>
+<p class="auth-caption">Your servers. Your permissions. Your gateway.</p></main>
 </body></html>{{end}}
 
 {{define "oauthConsent"}}{{template "authShell"}}
-<form method="post" action="/oauth/authorize" class="w-full max-w-md rounded-lg border border-line bg-panel p-6">
+<form method="post" action="/oauth/authorize" class="auth-card">
   <input type="hidden" name="client_id" value="{{.ClientID}}">
   <input type="hidden" name="redirect_uri" value="{{.Redirect}}">
   <input type="hidden" name="response_type" value="code">
@@ -62,4 +66,5 @@
     <button class="btn btn-primary" name="action" value="allow" type="submit">Allow</button>
   </div>
 </form>
+<p class="auth-caption">Your servers. Your permissions. Your gateway.</p></main>
 </body></html>{{end}}

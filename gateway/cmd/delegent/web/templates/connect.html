@@ -1,106 +1,121 @@
 {{define "connect"}}
-<div class="flex items-baseline justify-between border-b border-line px-4 py-2.5">
-  <h3 class="font-semibold">Connect an agent</h3>
-  <span class="text-xs text-ink-faint">{{len .Keys}} keys</span>
+<div class="panel-heading">
+  <h3>Connect an agent</h3>
+  <button class="btn panel-close" type="button" data-panel-toggle="connect" aria-label="Close connection panel">×</button>
 </div>
-<div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+<div class="connect-content min-h-0 flex-1 overflow-y-auto">
+  {{if and .Notice (not .Minted)}}<p class="connection-notice bg-ok-soft text-ok" role="status">{{.Notice}}</p>{{end}}
+  {{if .Error}}<p class="connection-notice bg-bad-soft text-bad" role="alert">{{.Error}}</p>{{end}}
 
-  {{if .Notice}}<p class="mb-3 rounded-md bg-ok-soft px-3 py-2 text-ok">{{.Notice}}</p>{{end}}
-  {{if .Error}}<p class="mb-3 rounded-md bg-bad-soft px-3 py-2 text-bad">{{.Error}}</p>{{end}}
-
-  {{if .Minted}}
-  <div class="mb-4 rounded-md border border-accent bg-accent-soft p-3">
-    <p class="text-xs font-medium text-accent">Your new agent key — shown once</p>
-    <div class="mt-1.5 flex items-center gap-2">
-      <code class="min-w-0 flex-1 break-all font-mono text-xs" id="minted">{{.Minted}}</code>
-      <button class="btn shrink-0 py-1 text-xs" data-copy="#minted">Copy</button>
-    </div>
-    <p class="mt-1.5 text-xs text-ink-soft">It is already filled into the snippets below.</p>
-  </div>
-  {{end}}
-
-  <h4 class="text-xs font-medium text-ink-soft">Agent keys</h4>
-  <form hx-post="/keys" hx-target="#connect" class="mt-1.5 flex gap-2">
-    <input class="input" name="name" placeholder="laptop" required>
-    <button class="btn btn-primary shrink-0" type="submit">Mint</button>
-  </form>
-  <ul class="mt-2">
-    {{range .Keys}}
-    <li class="flex items-baseline gap-2 border-b border-line py-1.5">
-      <span class="min-w-0 flex-1">
-        <span class="flex items-baseline gap-2">
-          <span class="truncate font-medium {{if .Revoked}}text-ink-faint line-through{{end}}">{{.Name}}</span>
-          {{if .ViaOAuth}}<span class="pill bg-accent-soft text-accent">signed in</span>{{end}}
-          <span class="font-mono text-[11px] text-ink-faint">{{.Prefix}}…</span>
-        </span>
-        <span class="block text-[11px] text-ink-faint">{{.LastUsed}}{{if .ViaOAuth}} · approved for {{.Client}}{{end}}</span>
-      </span>
-      {{if .Revoked}}<span class="pill bg-paper text-ink-faint">revoked</span>
-      {{else if .ViaOAuth}}
-      {{/* No Roll: a signed-in agent holds a token and never learns a replacement key.
-           Disconnecting is the real control — it signs in again to come back. */}}
-      <button class="btn py-0.5 text-[11px]" hx-post="/keys/{{.ID}}/revoke" hx-target="#connect"
-              hx-confirm="Disconnect {{.Name}}? It stops working immediately and has to sign in again to come back.">Disconnect</button>
-      {{else}}
-      <button class="btn py-0.5 text-[11px]" hx-post="/keys/{{.ID}}/roll" hx-target="#connect"
-              hx-confirm="Roll {{.Name}}? A new key is minted and this one stops working.">Roll</button>
-      <button class="btn py-0.5 text-[11px]" hx-post="/keys/{{.ID}}/revoke" hx-target="#connect"
-              hx-confirm="Revoke {{.Name}}? Any agent using it stops working.">Revoke</button>
+  <section class="connection-section" aria-labelledby="client-setup-title">
+    <h4 class="section-label" id="client-setup-title">Client configuration</h4>
+    <p class="connection-help">Choose your client, then copy its configuration.</p>
+    <div class="client-tabs" role="tablist" aria-label="Agent client">
+      {{range $i, $s := .Snippets}}
+      <button class="ctab {{if eq $i 0}}ctab-on{{end}}" data-client="{{$s.ID}}" type="button" role="tab" id="client-tab-{{$s.ID}}" aria-controls="client-{{$s.ID}}" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}" tabindex="{{if eq $i 0}}0{{else}}-1{{end}}">{{$s.Label}}</button>
       {{end}}
-    </li>
-    {{if not .Revoked}}
-    <li class="border-b border-line pb-2">
-      <form hx-post="/keys/{{.ID}}/channels" hx-target="#connect" hx-trigger="change">
-        <label class="block text-[11px] text-ink-soft" for="ch-{{.ID}}">Ask for consent through</label>
-        <select class="input mt-0.5 py-1 text-xs" id="ch-{{.ID}}" name="channels">
-          {{$cur := .Channels}}
-          {{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}
-        </select>
-      </form>
-      <p class="mt-1 text-[11px] text-ink-faint">{{.Hint}}</p>
-    </li>
-    {{end}}
-    {{else}}
-    <li class="py-2 text-ink-soft">No keys yet. Mint one to connect an agent.</li>
-    {{end}}
-  </ul>
-
-  <h4 class="mt-6 text-xs font-medium text-ink-soft">Config snippet</h4>
-  <div class="mt-1.5 flex flex-wrap gap-1">
+    </div>
     {{range $i, $s := .Snippets}}
-    <button class="ctab {{if eq $i 0}}ctab-on{{end}}" data-client="{{$s.ID}}">{{$s.Label}}</button>
-    {{end}}
-  </div>
-  {{range $i, $s := .Snippets}}
-  <div class="client-pane mt-2 {{if ne $i 0}}hidden{{end}}" data-client="{{$s.ID}}">
-    <p class="font-mono text-[11px] text-ink-faint">{{$s.File}}</p>
-    {{if $s.Cmd}}
-    {{/* A one-liner scrolls sideways, so the button sits BESIDE it — overlaying would cover
-         the end of the command you are trying to copy. */}}
-    <div class="mt-1 flex items-start gap-2">
-      <pre class="snippet min-w-0 flex-1" id="cmd-{{$s.ID}}">{{$s.Cmd}}</pre>
-      <button class="btn shrink-0 py-0.5 text-[11px]" data-copy="#cmd-{{$s.ID}}">Copy</button>
-    </div>
-    <p class="mt-1.5 text-center text-[11px] text-ink-faint">or as config</p>
-    {{end}}
-    <div class="relative mt-1">
-      <button class="btn absolute right-2 top-2 py-0.5 text-[11px]" data-copy="#snip-{{$s.ID}}">Copy</button>
-      <pre class="snippet" id="snip-{{$s.ID}}">{{$s.JSON}}</pre>
-    </div>
-    <p class="mt-1.5 text-xs text-ink-soft">{{$s.Note}}</p>
-    {{if $s.AltJSON}}
-    <details class="mt-3">
-      <summary class="cursor-pointer text-xs text-ink-soft">Or connect with an agent key</summary>
-      <p class="mt-1.5 font-mono text-[11px] text-ink-faint">{{$s.AltFile}}</p>
-      <div class="relative mt-1">
-        <button class="btn absolute right-2 top-2 py-0.5 text-[11px]" data-copy="#alt-{{$s.ID}}">Copy</button>
-        <pre class="snippet" id="alt-{{$s.ID}}">{{$s.AltJSON}}</pre>
+    <div class="client-pane {{if ne $i 0}}hidden{{end}}" data-client="{{$s.ID}}" id="client-{{$s.ID}}" role="tabpanel" aria-labelledby="client-tab-{{$s.ID}}" tabindex="0">
+      {{if $s.Cmd}}
+      <div class="config-block">
+        <div class="config-heading"><span>{{if eq $s.ID "claude-code"}}Run in your terminal{{else}}{{$s.File}}{{end}}</span><button class="btn snippet-copy" type="button" data-copy="#cmd-{{$s.ID}}" aria-label="Copy {{$s.Label}} {{if eq $s.ID "claude-code"}}command{{else}}URL{{end}}">Copy</button></div>
+        <pre class="snippet" id="cmd-{{$s.ID}}">{{$s.Cmd}}</pre>
       </div>
-      <p class="mt-1.5 text-xs text-ink-soft">{{$s.AltNote}}</p>
-      {{if $.Placeholder}}<p class="mt-1.5 text-xs text-warn">Mint a key above to fill in <code>dgk_…</code> — a stored key's value cannot be shown again.</p>{{end}}
-    </details>
+      <p class="config-alternative">Or add the configuration manually</p>
+      {{end}}
+      <div class="config-block">
+        <div class="config-heading"><span>{{if $s.Cmd}}Configuration{{else}}{{$s.File}}{{end}}</span><button class="btn snippet-copy" type="button" data-copy="#snip-{{$s.ID}}" aria-label="Copy {{$s.Label}} configuration">Copy</button></div>
+        <pre class="snippet" id="snip-{{$s.ID}}">{{$s.JSON}}</pre>
+      </div>
+      <p class="connection-help config-note">{{$s.Note}}</p>
+      {{if $s.AltJSON}}
+      <details class="connection-disclosure" data-panel-disclosure="key-config-{{$s.ID}}">
+        <summary>Use an agent key instead</summary>
+        <div class="disclosure-content">
+          <p class="connection-help">{{$s.AltNote}}</p>
+          {{if $.Placeholder}}<p class="key-config-hint">Create a key in <strong>Agent keys</strong> below, then replace <code>dgk_…</code> with its value.</p>{{end}}
+          <div class="config-block">
+            <div class="config-heading"><span>{{$s.AltFile}}</span><button class="btn snippet-copy" type="button" data-copy="#alt-{{$s.ID}}" aria-label="Copy {{$s.Label}} agent-key configuration">Copy</button></div>
+            <pre class="snippet" id="alt-{{$s.ID}}">{{$s.AltJSON}}</pre>
+          </div>
+        </div>
+      </details>
+      {{end}}
+    </div>
     {{end}}
-  </div>
+  </section>
+
+  <section class="connection-section agent-keys-section" aria-labelledby="agent-keys-title">
+    <div class="connection-section-heading"><h4 class="section-label" id="agent-keys-title">Agent keys</h4><span class="optional-label">Optional</span></div>
+    <p class="connection-help">For clients that use a key instead of browser sign-in. Create a separate key for each agent or device.</p>
+    <form hx-post="/keys" hx-target="#connect" hx-disabled-elt="find button" class="key-create-form">
+      <label for="agent-key-name">Key name</label>
+      <div class="key-create-row"><input class="input" id="agent-key-name" name="name" placeholder="e.g. work laptop" autocomplete="off" required><button class="btn btn-primary" type="submit">Create key</button></div>
+    </form>
+    {{if .Minted}}
+    <div class="minted-key" role="status">
+      <div class="connection-section-heading"><h5>Your new key <span>· shown once</span></h5><button class="btn snippet-copy" type="button" data-copy="#minted" aria-label="Copy new agent key">Copy</button></div>
+      {{if .Notice}}<p>{{.Notice}}</p>{{end}}
+      <code id="minted">{{.Minted}}</code>
+      <p>The key-based configurations above already include this value.</p>
+    </div>
+    {{end}}
+    <ul class="key-list" aria-label="Agent keys">
+      {{$hasKeys := false}}
+      {{range .Keys}}{{if not .ViaOAuth}}{{$hasKeys = true}}
+      <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
+        <div class="key-card-heading"><h5>{{.Name}}</h5><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Revoked{{else}}Active{{end}}</span></div>
+        <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span></div>
+        {{if .Revoked}}<p class="connection-help">This key can no longer connect to the gateway.</p>{{else}}
+        <details class="connection-disclosure key-settings" data-panel-disclosure="settings-{{.ID}}">
+          <summary>Approval settings</summary>
+          <div class="disclosure-content">
+            <form hx-post="/keys/{{.ID}}/channels" hx-target="#connect" hx-trigger="change">
+              <label for="ch-{{.ID}}">Ask for consent through</label>
+              <select class="input" id="ch-{{.ID}}" name="channels">{{$cur := .Channels}}{{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}</select>
+            </form>
+            <p class="connection-help">{{.Hint}}</p>
+          </div>
+        </details>
+        <div class="key-actions">
+          <button class="btn" type="button" hx-post="/keys/{{.ID}}/roll" hx-target="#connect" hx-confirm="Rotate {{.Name}}? A new key is created and the current key stops working immediately." aria-label="Rotate {{.Name}} key">Rotate key</button>
+          <button class="btn text-bad" type="button" hx-post="/keys/{{.ID}}/revoke" hx-target="#connect" hx-confirm="Revoke {{.Name}}? Any agent using this key stops working immediately." aria-label="Revoke {{.Name}} key">Revoke key</button>
+        </div>
+        {{end}}
+      </li>
+      {{end}}{{end}}
+      {{if not $hasKeys}}<li class="key-empty"><strong>No keys yet</strong><span>Browser sign-in works without one.</span></li>{{end}}
+    </ul>
+  </section>
+
+  {{$hasSignedIn := false}}{{range .Keys}}{{if .ViaOAuth}}{{$hasSignedIn = true}}{{end}}{{end}}
+  {{if $hasSignedIn}}
+  <section class="connection-section" aria-labelledby="signed-in-title">
+    <h4 class="section-label" id="signed-in-title">Signed-in agents</h4>
+    <p class="connection-help">Connections approved with your dashboard login.</p>
+    <ul class="key-list" aria-label="Signed-in agents">
+      {{range .Keys}}{{if .ViaOAuth}}
+      <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
+        <div class="key-card-heading"><h5>{{.Name}}</h5><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Disconnected{{else}}signed in{{end}}</span></div>
+        <p class="connection-help">{{.LastUsed}} · approved for {{.Client}}</p>
+        {{if not .Revoked}}
+        <details class="connection-disclosure key-settings" data-panel-disclosure="settings-{{.ID}}">
+          <summary>Approval settings</summary>
+          <div class="disclosure-content">
+            <form hx-post="/keys/{{.ID}}/channels" hx-target="#connect" hx-trigger="change">
+              <label for="ch-{{.ID}}">Ask for consent through</label>
+              <select class="input" id="ch-{{.ID}}" name="channels">{{$cur := .Channels}}{{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}</select>
+            </form>
+            <p class="connection-help">{{.Hint}}</p>
+          </div>
+        </details>
+        <div class="key-actions key-actions-single"><button class="btn" type="button" hx-post="/keys/{{.ID}}/revoke" hx-target="#connect" hx-confirm="Disconnect {{.Name}}? It stops working immediately and must sign in again to reconnect.">Disconnect</button></div>
+        {{end}}
+      </li>
+      {{end}}{{end}}
+    </ul>
+  </section>
   {{end}}
 </div>
 {{end}}
