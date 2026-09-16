@@ -355,6 +355,18 @@ func (js *JSONFileStore) PutOAuthClient(ctx context.Context, c *OAuthClient) err
 	return js.saveOAuthClients()
 }
 
+func (js *JSONFileStore) DeleteTarget(ctx context.Context, id string) error {
+	if err := js.MemStore.DeleteTarget(ctx, id); err != nil {
+		return err
+	}
+	for _, save := range []func() error{js.saveTargets, js.saveAdapters, js.saveAdvisors, js.saveOAuthClients, js.saveEntitlements} {
+		if err := save(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (js *JSONFileStore) PutOAuthPending(ctx context.Context, p *OAuthPending) error {
 	if err := js.MemStore.PutOAuthPending(ctx, p); err != nil {
 		return err

@@ -176,7 +176,9 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	})
 	if AuthRequired(r.st) {
-		h = auth.RequireBearerToken(makeVerifier(r.st, id), &auth.RequireBearerTokenOptions{})(h)
+		h = auth.RequireBearerToken(makeVerifier(r.st, id), &auth.RequireBearerTokenOptions{
+			ResourceMetadataURL: ResourceMetadataURL(req),
+		})(h)
 	}
 	h.ServeHTTP(w, req)
 }

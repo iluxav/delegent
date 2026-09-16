@@ -148,9 +148,12 @@ it with the same CLI: `docker exec <ctr> delegent target add …`.
 
 ## Not here (yet or by design)
 
-- **OAuth acquisition flow** — targets whose credential is an OAuth 2.1 TokenSet refresh
-  automatically, but the interactive connect/consent wizard that obtains one is currently
-  hosted-product-only. Static bearer / query-param credentials cover most local setups.
+- **OAuth for servers without dynamic client registration** — adding a server in the web
+  dashboard with no token discovers its authorization server (401 → `WWW-Authenticate` →
+  protected-resource metadata → RFC 8414 metadata), registers a client dynamically, and runs
+  authorization-code + PKCE in your browser. An authorization server that publishes no
+  `registration_endpoint` (GitHub, for one) needs a client you registered yourself, which the
+  dashboard cannot do for you yet — paste a token for those.
 - **Multi-operator, orgs, hosted channels, dashboards, the curated adapter registry** — the
   hosted product.
 - **Cross-instance delegation** — the instance identity minted at `init` is its future

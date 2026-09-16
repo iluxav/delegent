@@ -61,6 +61,9 @@ func cmdServe(args []string) error {
 	mux.HandleFunc("/mcp", registry.ServeAggregate)
 	mux.HandleFunc("/mcp/{$}", registry.ServeAggregate)
 	mountAdmin(mux, e, registry, tgm)
+	if err := mountWeb(mux, e, registry); err != nil {
+		return fmt.Errorf("dashboard: %w", err)
+	}
 
 	cleanup, err := writeRunfile(e.home, e.cfg.ListenAddr, "serve")
 	if err != nil {
@@ -74,7 +77,7 @@ func cmdServe(args []string) error {
 		cleanup()
 		_ = srv.Close()
 	}()
-	log.Printf("[delegent] build %s | operator %s | up — http://%s/mcp (agents) and /admin (CLI)",
+	log.Printf("[delegent] build %s | operator %s | up — http://%s/mcp (agents), /admin (CLI), / (dashboard)",
 		version, e.operator, e.cfg.ListenAddr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

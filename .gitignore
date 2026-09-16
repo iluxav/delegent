@@ -2,3 +2,8 @@
 gateway/delegent
 protocol/delegent-proto
 dist/
+*.img
+cacert.pem
+inspector/mcp-inspector
+inspector/.cache/
+gateway/cmd/delegent/delegent

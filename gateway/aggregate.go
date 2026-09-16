@@ -467,7 +467,9 @@ func makeUserVerifier(st store.Store) auth.TokenVerifier {
 // the per-target dev posture).
 func (r *Registry) ServeAggregate(w http.ResponseWriter, req *http.Request) {
 	if AuthRequired(r.st) {
-		auth.RequireBearerToken(makeUserVerifier(r.st), &auth.RequireBearerTokenOptions{})(
+		auth.RequireBearerToken(makeUserVerifier(r.st), &auth.RequireBearerTokenOptions{
+			ResourceMetadataURL: ResourceMetadataURL(req),
+		})(
 			http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				user := ""
 				if ti := auth.TokenInfoFromContext(req.Context()); ti != nil {
@@ -540,4 +542,19 @@ func (r *Registry) dropAggregates() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.aggregates = map[string]*Aggregate{}
+}
+
+// ResourceMetadataURL is where a client should look for this endpoint's protected-resource
+// metadata (RFC 9728). It is derived from the request, not from config, so it stays correct
+// behind a tunnel or a different host. The 401 carries it in WWW-Authenticate, which is how an
+// agent that speaks OAuth discovers it can sign in instead of being handed a key.
+func ResourceMetadataURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	}
+	return scheme + "://" + r.Host + "/.well-known/oauth-protected-resource" + strings.TrimSuffix(r.URL.Path, "/")
 }

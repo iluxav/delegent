@@ -1,0 +1,76 @@
+{{define "page"}}<!doctype html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Inspector</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js"></script>
+</head>
+<body class="h-full overflow-hidden bg-paper font-sans text-sm text-ink antialiased">
+<div class="flex h-full">
+  <aside id="servers" class="flex w-80 shrink-0 flex-col border-r border-line bg-panel"
+         hx-get="/servers" hx-trigger="servers from:body" hx-swap="innerHTML">
+    {{template "servers" .SidebarData}}
+  </aside>
+  <main id="main" class="flex min-w-0 flex-1 flex-col">
+    {{if .S}}{{template "workspace" .}}{{else}}{{template "empty" .}}{{end}}
+  </main>
+</div>
+<script>
+  // Tabs: the clicked one is active. Everything else on the page is htmx.
+  document.body.addEventListener('click', function (ev) {
+    var tab = ev.target.closest('.tab');
+    if (!tab) return;
+    for (var t of tab.parentElement.querySelectorAll('.tab')) t.classList.toggle('tab-active', t === tab);
+  });
+</script>
+</body>
+</html>{{end}}
+
+{{define "servers"}}
+<div class="flex items-baseline justify-between px-4 pt-4 pb-3">
+  <h1 class="text-base font-semibold tracking-tight">MCP Inspector</h1>
+  <span class="text-xs text-ink-faint">{{.Version}}</span>
+</div>
+<nav class="min-h-0 flex-1 overflow-y-auto px-2">
+  {{range .Servers}}
+  <a href="/?s={{.Name}}" hx-get="/servers/{{.Name}}" hx-target="#main" hx-push-url="/?s={{.Name}}"
+     class="mb-0.5 flex items-start gap-2.5 rounded-md px-2 py-2 hover:bg-paper {{if eq $.Selected .Name}}bg-accent-soft hover:bg-accent-soft{{end}}">
+    {{template "dot" .}}
+    <span class="min-w-0 flex-1">
+      <span class="flex items-baseline gap-2">
+        <span class="truncate font-medium">{{.Name}}</span>
+        <span class="rounded bg-paper px-1 text-[11px] text-ink-soft">{{.Spec.Kind}}</span>
+      </span>
+      <span class="block truncate font-mono text-[11px] text-ink-soft">{{.Spec.Summary}}</span>
+    </span>
+  </a>
+  {{else}}
+  <p class="px-2 py-3 text-ink-soft">No servers yet. Paste an <code>mcpServers</code> block below and load it.</p>
+  {{end}}
+</nav>
+<form hx-post="/servers" hx-target="#servers" class="border-t border-line p-3">
+  <label for="config" class="mb-1.5 block text-xs font-medium text-ink-soft">Servers config</label>
+  <textarea id="config" name="config" rows="10" spellcheck="false" class="input font-mono text-xs"
+            placeholder="{{.Example}}">{{.ConfigText}}</textarea>
+  {{if .ConfigErr}}<p class="mt-2 text-xs text-bad">{{.ConfigErr}}</p>{{end}}
+  <div class="mt-2 flex items-center justify-between">
+    <button class="btn btn-primary" type="submit">Load servers</button>
+    <span class="htmx-indicator text-xs text-ink-soft">Saving…</span>
+  </div>
+</form>
+{{end}}
+
+{{define "dot"}}{{if .Connected}}<span class="mt-1.5 size-2 shrink-0 rounded-full bg-ok" title="connected"></span>{{else if .Connecting}}<span class="mt-1.5 size-2 shrink-0 rounded-full bg-warn" title="connecting"></span>{{else if .Err}}<span class="mt-1.5 size-2 shrink-0 rounded-full bg-bad" title="{{.Err}}"></span>{{else}}<span class="mt-1.5 size-2 shrink-0 rounded-full border border-ink-faint" title="not connected"></span>{{end}}{{end}}
+
+{{define "empty"}}
+<div class="flex flex-1 items-center justify-center p-8">
+  <div class="max-w-md">
+    <h2 class="text-lg font-semibold">Pick a server to inspect</h2>
+    <p class="mt-2 text-ink-soft">Paste an <code>mcpServers</code> block on the left and load it, then choose a server. Connect to list its tools, resources and prompts. Every message in both directions lands in the transcript, and elicitation requests open as a form you can answer.</p>
+  </div>
+</div>
+{{end}}
+
+{{define "alert"}}<span class="{{if .OK}}text-ok{{else}}text-bad{{end}}">{{.Text}}</span>{{end}}

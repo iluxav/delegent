@@ -52,16 +52,24 @@ func runOpsSuite(t *testing.T, o ops) {
 	ctx := context.Background()
 
 	// targets
+	// All three provisioned tools are listed, including the unclassified one: a tool that
+	// cannot be classified is REFUSED, not forgotten, or nobody could ever classify it.
 	rows, err := o.ListTargets(ctx)
-	if err != nil || len(rows) != 1 || rows[0].ID != "gh" || rows[0].Tools != 2 {
-		t.Fatalf("ListTargets = %+v, %v (want 1 target, 2 classified tools)", rows, err)
+	if err != nil || len(rows) != 1 || rows[0].ID != "gh" || rows[0].Tools != 3 {
+		t.Fatalf("ListTargets = %+v, %v (want 1 target, 3 tools incl. the refused one)", rows, err)
 	}
 	det, err := o.TargetDetail(ctx, "gh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(det.Tools) != 2 || len(det.Entitlement.Scopes) != 3 { // mcp:connect + 2
+	if len(det.Tools) != 3 || len(det.Entitlement.Scopes) != 3 { // mcp:connect + 2 granted scopes
 		t.Fatalf("detail: tools=%d scopes=%v", len(det.Tools), det.Entitlement.Scopes)
+	}
+	// the unclassified one carries no scope, so nothing can grant it
+	for _, tl := range det.Tools {
+		if tl.Name == "mystery" && (!provision.IsUnknown(tl.Effect) || tl.Scope != "") {
+			t.Fatalf("mystery should be listed as refused with no scope, got %+v", tl)
+		}
 	}
 	if _, err := o.TargetDetail(ctx, "nope"); err == nil {
 		t.Fatal("missing target must error")
@@ -87,8 +95,10 @@ func runOpsSuite(t *testing.T, o ops) {
 	if byName["mystery"].Scope != "files:write" {
 		t.Fatalf("mystery not reclassified: %+v", det.Tools)
 	}
-	if _, ok := byName["send_mail"]; ok {
-		t.Fatalf("send_mail flipped unknown must leave the adapter rules: %+v", det.Tools)
+	// send_mail was flipped to unknown: its RULE is gone (nothing can grant it any more), but
+	// it is still listed so the operator can see what they refused and change their mind.
+	if sm, ok := byName["send_mail"]; !ok || !provision.IsUnknown(sm.Effect) || sm.Scope != "" {
+		t.Fatalf("send_mail flipped unknown should be listed as refused, got %+v ok=%v", byName["send_mail"], ok)
 	}
 	// entitlement UNION: mail:send survives (never narrowed), files:write added
 	scopes := strings.Join(det.Entitlement.Scopes, ",")

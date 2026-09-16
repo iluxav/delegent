@@ -310,6 +310,12 @@ type AgentKey struct {
 	CreatedAt  int64
 	LastUsedAt int64 // 0 = never
 	RevokedAt  int64 // 0 = active
+	// OAuthClientID names the registered agent this key was ISSUED to through the sign-in flow.
+	// Empty means the key was minted by hand. It is how a surface tells a connection the
+	// operator approved in a browser apart from a secret they copied into a config file —
+	// which matters, because the two are managed differently (an OAuth agent cannot be handed
+	// a rolled key; it has to sign in again).
+	OAuthClientID string
 	// ConsentChannels is this key's ordered consent-channel policy ("elicitation" | "widget" |
 	// "console"): how a human approves requests from the harness holding this key. Empty = auto
 	// (capability order). The gateway always falls back to the web console after the list.
@@ -394,6 +400,11 @@ type Store interface {
 	// oauth clients (per-target OAuth 2.1 registration; keyed by target id)
 	GetOAuthClient(ctx context.Context, targetID string) (*OAuthClient, error)
 	PutOAuthClient(ctx context.Context, c *OAuthClient) error
+	// DeleteTarget removes a target and everything scoped to it: its adapter, advisor, every
+	// principal's entitlement on it, and its OAuth client registration. Receipts and activity
+	// events are NOT touched — the audit trail outlives the target it describes. The caller
+	// deletes the sealed credential (it lives in the SecretStore) and invalidates the gateway.
+	DeleteTarget(ctx context.Context, id string) error
 	// oauth flows (in-flight PKCE state; single-use)
 	PutOAuthFlow(ctx context.Context, f *OAuthFlow) error
 	TakeOAuthFlow(ctx context.Context, state string) (*OAuthFlow, error) // single-use: read-and-delete

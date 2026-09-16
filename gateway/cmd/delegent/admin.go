@@ -17,10 +17,7 @@ import (
 
 	"delegent.dev/gateway/agentkey"
 	"delegent.dev/gateway/id"
-	"delegent.dev/gateway/introspect"
-	"delegent.dev/gateway/oauth"
 	"delegent.dev/gateway/provision"
-	"delegent.dev/gateway/secretstore"
 	"delegent.dev/gateway/store"
 )
 
@@ -155,22 +152,7 @@ func (a *adminEnv) introspectTarget(w http.ResponseWriter, r *http.Request) {
 		a.notFoundOrErr(w, err)
 		return
 	}
-	cred := ""
-	if t.CredentialRef != "" {
-		secrets := secretstore.NewDB(a.e.st, a.e.sealer)
-		raw, err := secrets.Get(ctx, t.CredentialRef)
-		if err != nil {
-			adminJSON(w, http.StatusInternalServerError, map[string]string{"error": "credential unavailable: " + err.Error()})
-			return
-		}
-		cred = raw
-		if t.CredentialKind == "oauth2" {
-			if ts, err := oauth.UnmarshalSealed(raw); err == nil {
-				cred = ts.AccessToken
-			}
-		}
-	}
-	res, err := introspect.Introspect(ctx, t.Endpoint, cred)
+	res, err := probeUpstream(ctx, a.e, t)
 	if err != nil {
 		adminJSON(w, http.StatusBadGateway, map[string]string{"error": "introspection failed: " + err.Error()})
 		return
@@ -327,8 +309,16 @@ func (a *adminEnv) mintKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *adminEnv) mint(r *http.Request, name string) (keyRow, string, error) {
+	return a.mintFor(r, name, "")
+}
+
+// mintFor mints a key, optionally attributing it to the OAuth client it was issued to.
+func (a *adminEnv) mintFor(r *http.Request, name, oauthClientID string) (keyRow, string, error) {
 	full, hash, prefix := agentkey.New()
-	k := &store.AgentKey{ID: id.New("akey"), UserID: a.e.operator, Hash: hash, Prefix: prefix, Name: name, CreatedAt: nowMillis()}
+	k := &store.AgentKey{
+		ID: id.New("akey"), UserID: a.e.operator, Hash: hash, Prefix: prefix, Name: name,
+		OAuthClientID: oauthClientID, CreatedAt: nowMillis(),
+	}
 	if err := a.e.st.PutAgentKey(r.Context(), k); err != nil {
 		return keyRow{}, "", err
 	}

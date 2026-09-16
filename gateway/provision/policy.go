@@ -40,6 +40,7 @@ type adapterFile struct {
 	} `json:"default"`
 	Semantics    map[string]json.RawMessage `json:"semantics"`
 	Descriptions map[string]string          `json:"descriptions"`
+	Unclassified []string                   `json:"unclassified"`
 }
 
 // ParseAdapterTools reads a stored adapter document back into the editable tool rows
@@ -51,6 +52,7 @@ func ParseAdapterTools(doc json.RawMessage) ([]ToolSpec, error) {
 		return nil, err
 	}
 	var out []ToolSpec
+	classified := map[string]bool{}
 	for _, c := range af.Classify {
 		name, _ := c.Match.Body["params.name"].(string)
 		if c.Match.Method == "SSE" || name == "" {
@@ -60,7 +62,30 @@ func ParseAdapterTools(doc json.RawMessage) ([]ToolSpec, error) {
 		if len(c.Scopes) > 0 {
 			scope = c.Scopes[0]
 		}
+		classified[name] = true
 		spec := ToolSpec{Name: name, Effect: c.Effect, Scope: scope, Description: af.Descriptions[name]}
+		if raw, ok := af.Semantics[name]; ok {
+			_ = json.Unmarshal(raw, &spec.Semantics)
+		}
+		out = append(out, spec)
+	}
+
+	// Tools the classifier could not place have no rule — they are refused at call time. Return
+	// them too, marked unknown, so the editor can show what is being refused and let someone fix
+	// it. Adapters written before `unclassified` existed are covered by the descriptions map,
+	// which introspection fills for every tool it saw.
+	refused := map[string]bool{}
+	for _, name := range af.Unclassified {
+		refused[name] = true
+	}
+	for name := range af.Descriptions {
+		refused[name] = true
+	}
+	for name := range refused {
+		if classified[name] {
+			continue
+		}
+		spec := ToolSpec{Name: name, Effect: "unknown", Description: af.Descriptions[name]}
 		if raw, ok := af.Semantics[name]; ok {
 			_ = json.Unmarshal(raw, &spec.Semantics)
 		}

@@ -1,0 +1,78 @@
+/* Tailwind source for the delegent dashboard. Regenerate static/app.css with `make css` from
+   the repo root. Same Monokai token system as the inspector, so the two feel like one tool. */
+@import "tailwindcss";
+@source "../templates";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --color-paper: #1e1f1c;
+  --color-panel: #272822;
+  --color-ink: #f8f8f2;
+  --color-ink-soft: #b3af9e;
+  --color-ink-faint: #75715e;
+  --color-line: #3b3c35;
+
+  --color-accent: #66d9ef;
+  --color-accent-soft: #16343b;
+  --color-ok: #a6e22e;
+  --color-ok-soft: #26330f;
+  --color-warn: #fd971f;
+  --color-warn-soft: #3a2a10;
+  --color-bad: #f92672;
+  --color-bad-soft: #3a1421;
+  --color-yellow: #e6db74;
+  --color-purple: #ae81ff;
+}
+
+:root { color-scheme: dark; }
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm font-medium text-ink hover:bg-paper focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-accent bg-accent text-paper hover:bg-accent/90;
+  }
+  .input {
+    @apply w-full rounded-md border border-line bg-panel px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20;
+  }
+  .mono-block {
+    @apply max-h-[32rem] overflow-auto rounded-md bg-paper p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words;
+  }
+  .pill {
+    @apply rounded px-1.5 py-0.5 text-[11px] font-medium;
+  }
+}
+
+/* Effects carry the Monokai syntax colors: read is safe green, write yellow, destructive pink,
+   external orange, spends purple, unknown the comment grey. The same class colors a select's
+   current value and a badge, so the policy table scans like highlighted code. */
+.fx-read        { color: var(--color-ok); }
+.fx-write       { color: var(--color-yellow); }
+.fx-destructive { color: var(--color-bad); }
+.fx-external    { color: var(--color-warn); }
+.fx-spends      { color: var(--color-purple); }
+.fx-unknown     { color: var(--color-ink-faint); }
+select.fx-read, select.fx-write, select.fx-destructive, select.fx-external, select.fx-spends, select.fx-unknown { font-weight: 600; }
+
+/* The sidebar/main divider: a thin grip that widens on hover and while dragging. */
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing iframe { pointer-events: none; }
+
+/* A config snippet is meant to be copied, so lines scroll rather than wrap mid-token.
+   Right padding keeps the Copy button off the JSON. */
+.snippet { @apply max-h-[28rem] overflow-auto rounded-md bg-paper p-3 pr-16 font-mono text-xs leading-relaxed whitespace-pre; }
+
+/* Tabs across the central pane. */
+.mtab { @apply -mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2.5 text-sm font-medium text-ink-soft hover:text-ink; }
+.mtab-on { @apply border-accent text-ink; }
+
+/* Client tabs in the connect pane. */
+.ctab { @apply rounded border border-line bg-panel px-2 py-1 text-xs text-ink-soft hover:text-ink; }
+.ctab-on { @apply border-accent bg-accent-soft text-accent; }
+
+/* Pane dividers: thin, and they light up while you drag. */
+.grip { width: 4px; flex: none; background: var(--color-line); cursor: col-resize; transition: background .12s; }
+.grip:hover, body.resizing .grip { background: var(--color-accent); }

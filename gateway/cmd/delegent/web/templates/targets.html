@@ -1,0 +1,151 @@
+{{define "target"}}
+{{$t := .T}}
+<header class="flex flex-wrap items-center gap-3 border-b border-line bg-panel px-5 py-3">
+  <div class="min-w-0 flex-1">
+    <div class="flex items-center gap-2">
+      <span class="size-2 shrink-0 rounded-full {{if $t.Enabled}}bg-ok{{else}}border border-ink-faint{{end}}"></span>
+      <h2 class="truncate text-base font-semibold">{{$t.Name}}</h2>
+      <span class="pill bg-paper text-ink-soft">{{$t.ID}}</span>
+      {{if eq $t.CredentialKind "none"}}<span class="pill bg-paper text-ink-faint">no credential</span>{{else}}<span class="pill bg-paper text-ink-soft">{{if $t.CredentialKind}}{{$t.CredentialKind}}{{else}}bearer{{end}} sealed</span>{{end}}
+    </div>
+    <p class="truncate font-mono text-xs text-ink-soft">{{$t.Endpoint}}</p>
+  </div>
+  <form hx-post="/targets/{{$t.ID}}/introspect" hx-target="#main" hx-indicator="#probing">
+    <span id="probing" class="htmx-indicator mr-2 text-xs text-ink-soft">Probing upstream…</span>
+    <button class="btn" type="submit">Re-introspect</button>
+  </form>
+  <form hx-post="/targets/{{$t.ID}}/enabled" hx-target="#main">
+    <input type="hidden" name="enabled" value="{{if $t.Enabled}}false{{else}}true{{end}}">
+    <button class="btn" type="submit">{{if $t.Enabled}}Disable{{else}}Enable{{end}}</button>
+  </form>
+  <form hx-post="/targets/{{$t.ID}}/remove" hx-target="#main"
+        hx-confirm="Remove {{$t.Name}}? Its policy, scopes and stored credential are deleted, and agents lose its tools. The activity log is kept.">
+    <button class="btn text-bad" type="submit">Remove</button>
+  </form>
+</header>
+{{if .Notice}}<div class="border-b border-line bg-ok-soft px-5 py-2 text-ok">{{.Notice}}</div>{{end}}
+{{if .Error}}<div class="border-b border-line bg-bad-soft px-5 py-2 text-bad">{{.Error}}</div>{{end}}
+
+<nav class="flex gap-1 border-b border-line bg-panel px-4">
+  <a class="mtab {{if eq .Tab "adapter"}}mtab-on{{end}}" href="/targets/{{$t.ID}}" hx-get="/targets/{{$t.ID}}" hx-target="#main" hx-push-url="true">Adapter</a>
+  <a class="mtab {{if eq .Tab "audit"}}mtab-on{{end}}" href="/targets/{{$t.ID}}/audit" hx-get="/targets/{{$t.ID}}/audit" hx-target="#main" hx-push-url="true">Audit</a>
+  <a class="mtab {{if eq .Tab "consents"}}mtab-on{{end}}" href="/targets/{{$t.ID}}/consents" hx-get="/targets/{{$t.ID}}/consents" hx-target="#main" hx-push-url="true">
+    Consents{{if .LiveCount}} <span class="pill bg-warn-soft text-warn">{{.LiveCount}} waiting</span>{{end}}
+  </a>
+</nav>
+
+{{if eq .Tab "audit"}}{{template "auditPane" .}}
+{{else if eq .Tab "consents"}}{{template "consentsPane" .}}
+{{else}}{{template "adapterPane" .}}{{end}}
+{{end}}
+
+{{define "adapterPane"}}
+{{$t := .T}}
+<section class="px-5 pt-5">
+  <div class="flex items-baseline justify-between">
+    <h3 class="font-semibold">Tools <span class="font-normal text-ink-soft">{{len .Tools}}</span></h3>
+    <p class="text-xs text-ink-soft">{{if .Unknown}}<span class="text-bad">{{.Unknown}} refused</span> — give each an effect and a scope to allow it.{{else}}Every tool is classified.{{end}}</p>
+  </div>
+  <form hx-post="/targets/{{$t.ID}}/policy" hx-target="#main" class="mt-3">
+    <datalist id="scopes">{{range .AllScopes}}<option value="{{.}}">{{end}}</datalist>
+    <table class="w-full border-collapse text-left">
+      <thead class="text-xs text-ink-faint">
+        <tr class="border-b border-line">
+          <th class="py-1.5 pr-3 font-medium">Tool</th>
+          <th class="py-1.5 pr-3 font-medium">Effect</th>
+          <th class="py-1.5 pr-3 font-medium">Scope</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Tools}}{{$row := .}}
+        <tr class="border-b border-line align-top">
+          <td class="max-w-md py-2.5 pr-3">
+            <input type="hidden" name="tool" value="{{.Name}}">
+            {{if .New}}<input type="hidden" name="desc.{{.Name}}" value="{{.Description}}">{{end}}
+            <div class="flex items-baseline gap-2">
+              <span class="font-mono text-xs font-medium">{{.Name}}</span>
+              {{if .New}}<span class="pill bg-accent-soft text-accent">new upstream</span>{{else if or (eq .Effect "") (eq .Effect "unknown")}}<span class="pill bg-bad-soft text-bad">refused</span>{{end}}
+            </div>
+            {{if .Description}}<p class="mt-0.5 line-clamp-2 text-xs text-ink-soft">{{.Description}}</p>{{end}}
+          </td>
+          <td class="py-2 pr-3">
+            <select name="effect.{{.Name}}" data-fx class="input w-36 fx-{{if .Effect}}{{.Effect}}{{else}}unknown{{end}}">
+              {{range $.Effects}}<option class="fx-{{.}}" value="{{.}}" {{if or (eq . $row.Effect) (and (eq . "unknown") (eq $row.Effect ""))}}selected{{end}}>{{.}}</option>{{end}}
+            </select>
+          </td>
+          <td class="py-2 pr-3">
+            <input class="input w-48 font-mono text-xs" name="scope.{{.Name}}" value="{{.Scope}}" list="scopes" placeholder="family:action" spellcheck="false">
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="3" class="py-4 text-ink-soft">No tools stored. Re-introspect to draft them from upstream.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <div class="mt-3 flex items-center gap-3">
+      <button class="btn btn-primary" type="submit">Save policy</button>
+      <span class="text-xs text-ink-soft">Applies to the running gateway immediately. Unknown means refused.</span>
+    </div>
+  </form>
+</section>
+
+<section class="px-5 pt-8 pb-8">
+  <div class="flex items-baseline justify-between">
+    <h3 class="font-semibold">Scopes <span class="font-normal text-ink-soft">{{len .Scopes}}</span></h3>
+    <p class="text-xs text-ink-soft">What an agent can be granted on this server. Untick a scope to withhold it from every grant without deleting it.</p>
+  </div>
+  <form hx-post="/targets/{{$t.ID}}/scopes" hx-target="#main" class="mt-3">
+    {{range .Scopes}}
+    <label class="flex cursor-pointer items-start gap-3 border-b border-line py-2.5 hover:bg-panel">
+      <input type="checkbox" name="granted" value="{{.Scope}}" {{if .Granted}}checked{{end}} class="mt-1 size-4 accent-accent">
+      <span class="min-w-0 flex-1">
+        <span class="flex items-baseline gap-2">
+          <span class="font-mono text-xs font-medium">{{.Scope}}</span>
+          {{if .Risk}}<span class="pill {{if eq .Risk "high"}}bg-bad-soft text-bad{{else if eq .Risk "medium"}}bg-warn-soft text-warn{{else}}bg-ok-soft text-ok{{end}}">{{.Risk}}</span>{{end}}
+          {{if not .Granted}}<span class="pill bg-paper text-ink-faint">withheld</span>{{end}}
+        </span>
+        {{if .Human}}<span class="block text-xs text-ink-soft">{{.Human}}</span>{{end}}
+        {{if .Tools}}<span class="block font-mono text-[11px] text-ink-faint">{{join .Tools ", "}}</span>{{end}}
+      </span>
+    </label>
+    {{else}}
+    <p class="py-3 text-ink-soft">No scopes yet — classify tools above and save.</p>
+    {{end}}
+    {{if .Scopes}}<button class="btn btn-primary mt-3" type="submit">Save scopes</button>{{end}}
+  </form>
+</section>
+{{end}}
+
+{{define "newTarget"}}
+<div class="max-w-xl px-5 py-6">
+  <h2 class="text-base font-semibold">Add an MCP server</h2>
+  <p class="mt-1 text-ink-soft">Delegent connects to the endpoint, lists its tools, and drafts an effect and scope for each. You review the draft on the next screen.</p>
+  {{if .Error}}<p class="mt-4 rounded-md bg-bad-soft px-3 py-2 text-bad">{{.Error}}</p>{{end}}
+  <form hx-post="/targets" hx-target="#main" hx-indicator="#adding" class="mt-5">
+    <label class="block font-medium" for="name">Name</label>
+    <p class="text-xs text-ink-soft">Tools reach agents as <code><span id="slug">name</span>__&lt;tool&gt;</code>.</p>
+    <input class="input mt-1" id="name" name="name" value="{{.Name}}" placeholder="GitHub" required autofocus>
+    <label class="mt-4 block font-medium" for="endpoint">MCP endpoint</label>
+    <p class="text-xs text-ink-soft">Streamable HTTP URL.</p>
+    <input class="input mt-1 font-mono text-xs" id="endpoint" name="endpoint" value="{{.Endpoint}}" placeholder="https://api.example.com/mcp" required>
+    <label class="mt-4 block font-medium" for="credential">Token</label>
+    <p class="text-xs text-ink-soft">Leave this empty. If the server wants OAuth, Delegent finds its sign-in page and takes you there; the token is sealed here when you come back. Paste a token only for a server that issues you one directly.</p>
+    <input class="input mt-1 font-mono text-xs" id="credential" name="credential" type="password" autocomplete="off">
+    <div class="mt-6 flex items-center gap-3">
+      <button class="btn btn-primary" type="submit">Introspect and add</button>
+      <span id="adding" class="htmx-indicator text-xs text-ink-soft">Connecting to the endpoint…</span>
+    </div>
+  </form>
+</div>
+<script>
+  // Mirrors provision.Slug so you can see the id the name will produce.
+  (function () {
+    var name = document.getElementById('name'), out = document.getElementById('slug');
+    function sync() {
+      var v = (name.value || '').toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/[ _-]/g, '-').replace(/^-+|-+$/g, '');
+      out.textContent = v || 'name';
+    }
+    name.addEventListener('input', sync); sync();
+  })();
+</script>
+{{end}}

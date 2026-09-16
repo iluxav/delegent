@@ -1,0 +1,164 @@
+{{define "workspace"}}
+{{$s := .S}}
+<header class="flex flex-wrap items-center gap-3 border-b border-line bg-panel px-5 py-3">
+  <div class="min-w-0 flex-1">
+    <div class="flex items-center gap-2">
+      {{template "dot" $s}}
+      <h2 class="truncate text-base font-semibold">{{$s.Name}}</h2>
+      <span class="rounded bg-paper px-1.5 py-0.5 text-xs text-ink-soft">{{$s.Spec.Kind}}</span>
+    </div>
+    <p class="truncate font-mono text-xs text-ink-soft">{{$s.Spec.Summary}}</p>
+  </div>
+  <div id="notice" class="text-xs"></div>
+  {{if $s.Connected}}
+    <button class="btn" hx-post="/servers/{{$s.Name}}/ping" hx-target="#notice">Ping</button>
+    <button class="btn" hx-post="/servers/{{$s.Name}}/disconnect" hx-target="#main">Disconnect</button>
+  {{else}}
+    <span id="connecting" class="htmx-indicator text-xs text-ink-soft">Connecting…</span>
+    <button class="btn btn-primary" hx-post="/servers/{{$s.Name}}/connect" hx-target="#main" hx-indicator="#connecting">Connect</button>
+  {{end}}
+</header>
+{{if $s.Err}}<div class="border-b border-line bg-bad-soft px-5 py-2 text-bad">{{$s.Err}}</div>{{end}}
+<div class="flex min-h-0 flex-1">
+  <section class="flex min-w-0 flex-1 flex-col">
+    {{if $s.Connected}}
+    <nav class="flex gap-1 border-b border-line bg-panel px-3">
+      <button class="tab tab-active" hx-get="/servers/{{$s.Name}}/tools" hx-target="#panel" hx-trigger="click, load">Tools</button>
+      <button class="tab" hx-get="/servers/{{$s.Name}}/resources" hx-target="#panel">Resources</button>
+      <button class="tab" hx-get="/servers/{{$s.Name}}/prompts" hx-target="#panel">Prompts</button>
+      <button class="tab" hx-get="/servers/{{$s.Name}}/info" hx-target="#panel">Server</button>
+    </nav>
+    <div id="panel" class="min-h-0 flex-1 overflow-y-auto"></div>
+    {{else}}
+    <div class="p-5">
+      <p class="text-ink-soft">Not connected. Connect to list this server's tools, resources and prompts.</p>
+      {{template "spec" $s}}
+    </div>
+    {{end}}
+  </section>
+  <aside class="flex w-[26rem] shrink-0 flex-col border-l border-line bg-panel">
+    <div class="flex items-center justify-between border-b border-line px-4 py-2">
+      <h3 class="font-semibold">Transcript</h3>
+      <button class="btn py-1 text-xs" hx-post="/servers/{{$s.Name}}/transcript/clear" hx-target="#feed" hx-swap="innerHTML">Clear</button>
+    </div>
+    <input type="hidden" id="tseq" name="after" value="0">
+    <div id="feed" class="min-h-0 flex-1 overflow-y-auto"
+         hx-get="/servers/{{$s.Name}}/transcript" hx-include="#tseq"
+         hx-trigger="load, every 2s, transcript from:body" hx-swap="afterbegin"></div>
+  </aside>
+</div>
+<input type="hidden" id="eknown" name="known" value="">
+<div id="elicit" hx-get="/servers/{{$s.Name}}/elicitations" hx-include="#eknown"
+     hx-trigger="load, every 1s, transcript from:body" hx-swap="innerHTML"></div>
+{{end}}
+
+{{define "spec"}}
+<dl class="mt-3 grid max-w-2xl grid-cols-[9rem_1fr] gap-y-2">
+  <dt class="text-ink-soft">Transport</dt><dd>{{.Spec.Kind}}</dd>
+  {{if eq .Spec.Kind "stdio"}}
+  <dt class="text-ink-soft">Command</dt><dd class="font-mono text-xs">{{.Spec.Command}}{{range .Spec.Args}} {{.}}{{end}}</dd>
+  {{if .Spec.Cwd}}<dt class="text-ink-soft">Working dir</dt><dd class="font-mono text-xs">{{.Spec.Cwd}}</dd>{{end}}
+  {{if .Spec.Env}}<dt class="text-ink-soft">Env</dt><dd class="font-mono text-xs">{{range $k, $v := .Spec.Env}}{{$k}}=… {{end}}</dd>{{end}}
+  {{else}}
+  <dt class="text-ink-soft">URL</dt><dd class="font-mono text-xs break-all">{{.Spec.URL}}</dd>
+  {{if .Spec.Headers}}<dt class="text-ink-soft">Headers</dt><dd class="font-mono text-xs">{{range $k, $v := .Spec.Headers}}{{$k}}: … {{end}}</dd>{{end}}
+  {{end}}
+</dl>
+{{end}}
+
+{{define "info"}}
+{{$i := .S.Info}}
+<div class="p-5">
+  {{if $i}}
+  <dl class="grid max-w-3xl grid-cols-[9rem_1fr] gap-y-2">
+    <dt class="text-ink-soft">Server</dt><dd>{{$i.ServerInfo.Name}} {{$i.ServerInfo.Version}}{{if $i.ServerInfo.Title}} ({{$i.ServerInfo.Title}}){{end}}</dd>
+    <dt class="text-ink-soft">Protocol</dt><dd class="font-mono">{{$i.ProtocolVersion}}</dd>
+    <dt class="text-ink-soft">Capabilities</dt><dd><pre class="mono-block">{{pretty $i.Capabilities}}</pre></dd>
+    {{if $i.Instructions}}<dt class="text-ink-soft">Instructions</dt><dd><pre class="mono-block">{{$i.Instructions}}</pre></dd>{{end}}
+  </dl>
+  {{end}}
+  <h3 class="mt-6 font-semibold">Connection</h3>
+  {{template "spec" .S}}
+</div>
+{{end}}
+
+{{define "transcriptRows"}}
+<input type="hidden" id="tseq" name="after" value="{{.LastSeq}}" hx-swap-oob="true">
+{{range .Entries}}
+{{if or (eq .Dir "send") (eq .Dir "recv")}}
+<details class="border-b border-line px-3 py-1.5 {{if .Error}}bg-bad-soft{{end}}">
+  <summary class="flex cursor-pointer items-baseline gap-2 font-mono text-xs">
+    <span class="text-ink-faint">{{.Clock}}</span>
+    {{if eq .Dir "send"}}<span class="text-accent">→</span><span class="truncate">{{.Method}}</span>{{else}}<span class="text-recv">←</span><span class="truncate text-recv">{{.Method}}</span>{{end}}
+    <span class="ml-auto shrink-0 {{if .Error}}text-bad{{else}}text-ink-faint{{end}}">{{if .Error}}error{{else}}{{.Took}}{{end}}</span>
+  </summary>
+  {{if .Params}}<p class="mt-1.5 text-[11px] text-ink-faint">params</p><pre class="mono-block">{{.Params}}</pre>{{end}}
+  {{if .Result}}<p class="mt-1.5 text-[11px] text-ink-faint">result</p><pre class="mono-block">{{.Result}}</pre>{{end}}
+  {{if .Error}}<pre class="mono-block mt-1.5 text-bad">{{.Error}}</pre>{{end}}
+</details>
+{{else}}
+<div class="flex items-baseline gap-2 border-b border-line px-3 py-1.5 font-mono text-xs">
+  <span class="text-ink-faint">{{.Clock}}</span>
+  {{if eq .Dir "stderr"}}<span class="shrink-0 text-ink-faint">stderr</span><span class="min-w-0 whitespace-pre-wrap break-all text-ink-soft">{{.Text}}</span>{{else}}<span class="text-ink-soft">{{.Text}}</span>{{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "elicitations"}}
+<input type="hidden" id="eknown" name="known" value="{{.Known}}" hx-swap-oob="true">
+{{with .Current}}
+<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4">
+  <form hx-post="/servers/{{$.S.Name}}/elicitations/{{.ID}}" hx-target="#elicit" class="w-full max-w-lg rounded-lg border border-line bg-panel p-5 shadow-xl">
+    <p class="text-xs text-ink-soft">{{$.S.Name}} is asking{{if $.More}} ({{$.More}} more waiting){{end}}</p>
+    <p class="mt-1 whitespace-pre-wrap text-base">{{.Message}}</p>
+    {{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener" class="mt-3 inline-block break-all text-accent underline">{{.URL}}</a>{{end}}
+    {{template "fields" .Fields}}
+    <div class="mt-5 flex justify-end gap-2">
+      <button class="btn" name="action" value="cancel">Cancel</button>
+      <button class="btn" name="action" value="decline">Decline</button>
+      <button class="btn btn-primary" name="action" value="accept">Accept</button>
+    </div>
+  </form>
+</div>
+{{end}}
+{{end}}
+
+{{define "fields"}}
+{{range .}}{{$f := .}}
+<div class="mt-3">
+  <label class="flex items-baseline gap-2" for="f.{{.Name}}">
+    <span class="font-medium">{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}</span>
+    <span class="font-mono text-xs text-ink-faint">{{.Type}}{{if .Required}}, required{{end}}</span>
+  </label>
+  {{if .Description}}<p class="mb-1 text-xs text-ink-soft">{{.Description}}</p>{{end}}
+  {{if .Enum}}
+    <select class="input" id="f.{{.Name}}" name="f.{{.Name}}">
+      {{if not .Required}}<option value=""></option>{{end}}
+      {{range .Enum}}<option {{if eq . $f.Default}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  {{else if eq .Type "boolean"}}
+    <input type="checkbox" id="f.{{.Name}}" name="f.{{.Name}}" class="size-4 accent-accent" {{if eq .Default "true"}}checked{{end}}>
+  {{else if or (eq .Type "number") (eq .Type "integer")}}
+    <input type="number" step="any" class="input" id="f.{{.Name}}" name="f.{{.Name}}" value="{{.Default}}">
+  {{else if .JSON}}
+    <textarea class="input font-mono text-xs" rows="3" spellcheck="false" id="f.{{.Name}}" name="f.{{.Name}}" placeholder="JSON">{{.Default}}</textarea>
+  {{else}}
+    <input type="text" class="input" id="f.{{.Name}}" name="f.{{.Name}}" value="{{.Default}}">
+  {{end}}
+</div>
+{{end}}
+{{end}}
+
+{{define "contents"}}
+{{range .}}
+<div class="mt-3">
+  {{if eq .Kind "text"}}<pre class="mono-block">{{.Text}}</pre>
+  {{else if eq .Kind "image"}}<img src="{{.DataURI}}" alt="{{.MIME}}" class="max-h-96 rounded border border-line">
+  {{else if eq .Kind "audio"}}<audio controls src="{{.DataURI}}"></audio>
+  {{else if eq .Kind "link"}}<p class="text-xs text-ink-soft">resource link</p><p class="font-mono text-xs break-all">{{.URI}}</p>{{if .Name}}<p>{{.Name}}</p>{{end}}
+  {{else if eq .Kind "resource"}}<p class="font-mono text-xs text-ink-soft break-all">{{.URI}}{{if .MIME}} ({{.MIME}}){{end}}</p>{{if .Text}}<pre class="mono-block">{{.Text}}</pre>{{else if .DataURI}}<a class="text-accent underline" href="{{.DataURI}}" download>Download blob</a>{{end}}
+  {{else}}<pre class="mono-block">{{.Raw}}</pre>{{end}}
+</div>
+{{end}}
+{{end}}

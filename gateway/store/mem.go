@@ -523,6 +523,27 @@ func (m *MemStore) PutOAuthClient(_ context.Context, c *OAuthClient) error {
 	return nil
 }
 
+// DeleteTarget drops the target and every row keyed to it, in one lock so a concurrent read
+// never sees a half-removed target.
+func (m *MemStore) DeleteTarget(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.targets[id]
+	if !ok {
+		return ErrNotFound
+	}
+	delete(m.targets, id)
+	delete(m.adapters, t.AdapterID)
+	delete(m.advisors, t.AdvisorID)
+	delete(m.oauthClients, id)
+	for k, e := range m.entitlements {
+		if e.TargetID == id {
+			delete(m.entitlements, k)
+		}
+	}
+	return nil
+}
+
 func (m *MemStore) PutOAuthFlow(_ context.Context, f *OAuthFlow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

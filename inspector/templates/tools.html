@@ -1,0 +1,133 @@
+{{define "tools"}}
+<div class="flex h-full min-h-0">
+  <div class="w-72 shrink-0 overflow-y-auto border-r border-line">
+    {{if .Err}}<p class="p-4 text-bad">{{.Err}}</p>{{end}}
+    {{range .Tools}}
+    <button class="block w-full border-b border-line px-4 py-2.5 text-left hover:bg-panel" hx-get="/servers/{{$.S.Name}}/tools/{{.Name}}" hx-target="#detail">
+      <span class="block truncate font-mono text-xs font-medium">{{.Name}}</span>
+      {{if .Description}}<span class="mt-0.5 line-clamp-2 block text-xs text-ink-soft">{{.Description}}</span>{{end}}
+    </button>
+    {{else}}{{if not .Err}}<p class="p-4 text-ink-soft">This server lists no tools.</p>{{end}}{{end}}
+  </div>
+  <div id="detail" class="min-w-0 flex-1 overflow-y-auto p-5">
+    <p class="text-ink-soft">{{len .Tools}} tools. Pick one to see its schema and call it.</p>
+  </div>
+</div>
+{{end}}
+
+{{define "tool"}}
+{{$t := .Tool}}
+<h3 class="font-mono text-base font-semibold">{{$t.Name}}</h3>
+{{if $t.Title}}<p class="text-ink-soft">{{$t.Title}}</p>{{end}}
+{{if $t.Description}}<p class="mt-2 max-w-prose whitespace-pre-wrap">{{$t.Description}}</p>{{end}}
+{{with $t.Annotations}}<p class="mt-2 font-mono text-xs text-ink-soft">annotations {{json .}}</p>{{end}}
+<form hx-post="/servers/{{.S.Name}}/tools/{{$t.Name}}" hx-target="#result" hx-indicator="#calling" class="mt-4 max-w-2xl">
+  {{if .HasFields}}{{template "fields" .Fields}}{{else}}<p class="mt-3 text-ink-soft">The input schema has no top-level properties. Pass arguments as JSON below.</p>{{end}}
+  <details class="mt-4">
+    <summary class="cursor-pointer text-xs text-ink-soft">Arguments as JSON (when filled in, this replaces the fields above)</summary>
+    <textarea name="args_json" rows="6" spellcheck="false" class="input mt-2 font-mono text-xs" placeholder="{{.Skeleton}}"></textarea>
+  </details>
+  <details class="mt-2">
+    <summary class="cursor-pointer text-xs text-ink-soft">Input schema</summary>
+    <pre class="mono-block mt-2">{{pretty $t.InputSchema}}</pre>
+  </details>
+  <div class="mt-4 flex items-center gap-3">
+    <button class="btn btn-primary" type="submit">Call {{$t.Name}}</button>
+    <span id="calling" class="htmx-indicator text-xs text-ink-soft">Waiting for the server. A consent-gated call can take a while.</span>
+  </div>
+</form>
+<div id="result" class="mt-5"></div>
+{{end}}
+
+{{define "result"}}
+<div class="flex items-center gap-2 border-b border-line pb-2">
+  {{if .Err}}<span class="rounded bg-bad-soft px-1.5 py-0.5 text-xs font-medium text-bad">transport error</span>
+  {{else if .Result.IsError}}<span class="rounded bg-warn-soft px-1.5 py-0.5 text-xs font-medium text-warn">tool error</span>
+  {{else}}<span class="rounded bg-ok-soft px-1.5 py-0.5 text-xs font-medium text-ok">ok</span>{{end}}
+  <span class="text-xs text-ink-soft">{{.Took}}</span>
+</div>
+{{if .Err}}<pre class="mono-block mt-3 text-bad">{{.Err}}</pre>{{end}}
+{{template "contents" .Views}}
+{{if .Structured}}<p class="mt-3 text-xs text-ink-soft">structuredContent</p><pre class="mono-block">{{.Structured}}</pre>{{end}}
+{{if .Raw}}<details class="mt-3"><summary class="cursor-pointer text-xs text-ink-soft">Raw result</summary><pre class="mono-block mt-2">{{.Raw}}</pre></details>{{end}}
+{{end}}
+
+{{define "resources"}}
+<div class="p-5">
+  <form hx-post="/servers/{{.S.Name}}/resources/read" hx-target="#rcontents" class="flex max-w-2xl gap-2">
+    <input class="input font-mono text-xs" name="uri" spellcheck="false" placeholder="Any URI, for example a filled-in template">
+    <button class="btn btn-primary shrink-0" type="submit">Read</button>
+  </form>
+  {{if .Err}}<p class="mt-3 text-bad">{{.Err}}</p>{{end}}
+  <div class="mt-5 grid gap-6 lg:grid-cols-2">
+    <div>
+      <h3 class="font-semibold">Resources <span class="font-normal text-ink-soft">{{len .Resources}}</span></h3>
+      {{range .Resources}}
+      <button class="mt-1 block w-full rounded-md border border-line bg-panel px-3 py-2 text-left hover:bg-accent-soft"
+              hx-post="/servers/{{$.S.Name}}/resources/read" hx-vals='{"uri": {{json .URI}}}' hx-target="#rcontents">
+        <span class="block font-medium">{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}</span>
+        <span class="block truncate font-mono text-xs text-ink-soft">{{.URI}}</span>
+        {{if .Description}}<span class="block text-xs text-ink-soft">{{.Description}}</span>{{end}}
+      </button>
+      {{else}}<p class="mt-1 text-ink-soft">None listed.</p>{{end}}
+    </div>
+    <div>
+      <h3 class="font-semibold">Templates <span class="font-normal text-ink-soft">{{len .Templates}}</span></h3>
+      {{range .Templates}}
+      <div class="mt-1 rounded-md border border-line bg-panel px-3 py-2">
+        <span class="block font-medium">{{.Name}}</span>
+        <span class="block break-all font-mono text-xs text-ink-soft">{{.URITemplate}}</span>
+        {{if .Description}}<span class="block text-xs text-ink-soft">{{.Description}}</span>{{end}}
+      </div>
+      {{else}}<p class="mt-1 text-ink-soft">None listed.</p>{{end}}
+    </div>
+  </div>
+  <div id="rcontents" class="mt-5"></div>
+</div>
+{{end}}
+
+{{define "resource"}}
+{{if .Err}}<pre class="mono-block text-bad">{{.Err}}</pre>{{else}}
+<div class="flex items-center gap-2 border-b border-line pb-2"><span class="rounded bg-ok-soft px-1.5 py-0.5 text-xs font-medium text-ok">ok</span><span class="text-xs text-ink-soft">{{.Took}}</span></div>
+{{template "contents" .Views}}{{end}}
+{{end}}
+
+{{define "prompts"}}
+<div class="flex h-full min-h-0">
+  <div class="w-72 shrink-0 overflow-y-auto border-r border-line">
+    {{if .Err}}<p class="p-4 text-bad">{{.Err}}</p>{{end}}
+    {{range .Prompts}}
+    <button class="block w-full border-b border-line px-4 py-2.5 text-left hover:bg-panel" hx-get="/servers/{{$.S.Name}}/prompts/{{.Name}}" hx-target="#pdetail">
+      <span class="block truncate font-mono text-xs font-medium">{{.Name}}</span>
+      {{if .Description}}<span class="mt-0.5 line-clamp-2 block text-xs text-ink-soft">{{.Description}}</span>{{end}}
+    </button>
+    {{else}}{{if not .Err}}<p class="p-4 text-ink-soft">This server lists no prompts.</p>{{end}}{{end}}
+  </div>
+  <div id="pdetail" class="min-w-0 flex-1 overflow-y-auto p-5"><p class="text-ink-soft">{{len .Prompts}} prompts. Pick one to fill in its arguments.</p></div>
+</div>
+{{end}}
+
+{{define "prompt"}}
+{{$p := .Prompt}}
+<h3 class="font-mono text-base font-semibold">{{$p.Name}}</h3>
+{{if $p.Description}}<p class="mt-2 max-w-prose">{{$p.Description}}</p>{{end}}
+<form hx-post="/servers/{{.S.Name}}/prompts/{{$p.Name}}" hx-target="#presult" class="mt-4 max-w-2xl">
+  {{range $p.Arguments}}
+  <div class="mt-3">
+    <label class="flex items-baseline gap-2" for="a.{{.Name}}"><span class="font-medium">{{.Name}}</span>{{if .Required}}<span class="font-mono text-xs text-ink-faint">required</span>{{end}}</label>
+    {{if .Description}}<p class="mb-1 text-xs text-ink-soft">{{.Description}}</p>{{end}}
+    <input type="text" class="input" id="a.{{.Name}}" name="a.{{.Name}}">
+  </div>
+  {{end}}
+  <button class="btn btn-primary mt-4" type="submit">Get prompt</button>
+</form>
+<div id="presult" class="mt-5"></div>
+{{end}}
+
+{{define "promptResult"}}
+{{if .Err}}<pre class="mono-block text-bad">{{.Err}}</pre>{{else}}
+<div class="flex items-center gap-2 border-b border-line pb-2"><span class="rounded bg-ok-soft px-1.5 py-0.5 text-xs font-medium text-ok">ok</span><span class="text-xs text-ink-soft">{{.Took}}</span>{{if .Description}}<span class="text-xs text-ink-soft">{{.Description}}</span>{{end}}</div>
+{{range .Messages}}
+<div class="mt-3"><p class="text-xs font-medium text-ink-soft">{{.Role}}</p>{{template "contents" .Views}}</div>
+{{end}}{{end}}
+{{end}}

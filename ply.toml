@@ -1,0 +1,59 @@
+# ply.toml — run delegent under ply, translated from the repo's Dockerfile.
+#
+# The Dockerfile builds the Go workspace (gateway + protocol) into one static
+# binary and serves it on 8090 with state in /data. ply does the same: the
+# [build] command runs inside a Linux builder image with this repo mounted at
+# /work (so go.work resolves the sibling ./protocol), then only the binary is
+# packed into the runtime image.
+#
+#   ply build .                                  # → delegent-0.1.0-linux-<arch>.img
+#   ply run delegent-0.1.0-linux-*.img --publish 8090 --volume /data
+#
+# Note: the modules require Go 1.25 but the registry carries go 1.24; Go's
+# toolchain manager auto-fetches 1.25 at build time (the build stage has
+# network). `cacert.pem` (Mozilla bundle) is committed and shipped for
+# delegent's own RUNTIME outbound TLS to MCP targets — the builder gets its CA
+# roots from ply. (Regenerate: curl -fsSL https://curl.se/ca/cacert.pem -o cacert.pem)
+
+[package]
+name = "delegent"
+version = "0.1.0"
+
+[build]
+base = "debian@13"
+dependencies = { go = "1.24" }
+# Build like the Dockerfile: from gateway/, static (CGO off) so it runs on the
+# debian base, caches on the on-disk /work (not the RAM overlay), binary at the
+# repo root. `-o ../delegent` lands it where `include` ships it from.
+# ply (>= 0.1.114) injects CA roots into the builder image, so the toolchain
+# and module downloads over HTTPS verify without any per-project setup.
+# Build in the in-VM tmpfs, not on /work: the microVM mounts /work over 9p,
+# which rejects the writable mmap the Go linker uses. `go build` links into
+# $WORK (=TMPDIR, which ply sets to /work/.tmp), so TMPDIR must move to tmpfs
+# too — then copy the finished binary out to /work (a plain write, which 9p is
+# fine with). Module/build caches stay on /work so they persist and don't fill
+# RAM. A Linux host builder (bind mount) doesn't need any of this.
+command = "cd gateway && CGO_ENABLED=0 GOTOOLCHAIN=auto TMPDIR=/tmp GOCACHE=/work/.gocache GOMODCACHE=/work/.gomodcache go build -trimpath -ldflags '-s -w' -o /tmp/delegent ./cmd/delegent && cp /tmp/delegent /work/delegent"
+# Ship the binary and a CA bundle for delegent's own RUNTIME HTTPS to targets
+# (the runtime image, unlike the builder, still needs its own certs).
+include = ["delegent", "cacert.pem"]
+
+[run]
+# docker-entrypoint.sh does two steps — idempotent init, then serve. ply's
+# entrypoint is one exec, so run both via the base's /bin/sh. cwd is the app
+# dir (/opt/delegent), so `./delegent` is the binary.
+entrypoint = [
+  "/bin/sh",
+  "-c",
+  "./delegent init --home \"${DELEGENT_HOME:-/data}\" --listen 0.0.0.0:8090 && exec ./delegent serve --home \"${DELEGENT_HOME:-/data}\"",
+]
+env = { DELEGENT_HOME = "/data", SSL_CERT_FILE = "/opt/delegent/cacert.pem" }
+# A label, not a host claim — bind it with `--publish 8090` at run time.
+ports = { web = 8090 }
+
+[health]
+port = 8090
+grace = "20s"
+
+[volumes]
+data = { path = "/data" }

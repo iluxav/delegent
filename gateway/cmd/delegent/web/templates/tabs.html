@@ -1,0 +1,177 @@
+{{define "auditPane"}}
+{{$t := .T}}
+<section class="px-5 pt-4 pb-8">
+  <div class="flex items-baseline justify-between gap-4">
+    <h3 class="font-semibold">Activity <span class="font-normal text-ink-soft">{{len .Events}}</span></h3>
+    <form hx-get="/targets/{{$t.ID}}/audit" hx-target="#main" hx-push-url="true" hx-trigger="change">
+      <select name="type" class="input w-56">
+        <option value="">every event</option>
+        {{range .EventTypes}}<option value="{{.}}" {{if eq . $.FilterType}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </form>
+  </div>
+  <div id="auditrows" class="mt-3"
+       hx-get="/targets/{{$t.ID}}/audit/rows?type={{.FilterType}}" hx-include="#akn"
+       hx-trigger="every 5s" hx-swap="innerHTML">
+    {{template "auditRows" .}}
+  </div>
+</section>
+{{end}}
+
+{{define "auditRows"}}
+<input type="hidden" id="akn" name="known" value="{{.AuditSig}}">
+<table class="w-full border-collapse text-left">
+  <thead class="text-xs text-ink-faint">
+    <tr class="border-b border-line">
+      <th class="py-1.5 pr-3 font-medium">Time</th>
+      <th class="py-1.5 pr-3 font-medium">Event</th>
+      <th class="py-1.5 pr-3 font-medium">Tool</th>
+      <th class="py-1.5 pr-3 font-medium">Detail</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Events}}
+    <tr class="border-b border-line align-top">
+      <td class="whitespace-nowrap py-2 pr-3 font-mono text-xs text-ink-faint">{{.Time}}</td>
+      <td class="whitespace-nowrap py-2 pr-3">
+        <span class="font-mono text-xs {{if eq .Tone "ok"}}text-ok{{else if eq .Tone "bad"}}text-bad{{else if eq .Tone "warn"}}text-warn{{else}}text-ink-soft{{end}}">{{.Type}}</span>
+      </td>
+      <td class="py-2 pr-3 font-mono text-xs">{{.Tool}}</td>
+      <td class="py-2 pr-3">
+        {{if .Scopes}}<span class="font-mono text-xs text-accent">{{.Scopes}}</span>{{end}}
+        {{if .Reason}}<span class="block text-xs text-ink-soft">{{.Reason}}</span>{{end}}
+        {{if .Intent}}<span class="block text-xs text-ink-faint">why: {{.Intent}}</span>{{end}}
+        {{if .Error}}<span class="block text-xs text-bad">{{.Error}}</span>{{end}}
+        {{if .Agent}}<span class="block text-[11px] text-ink-faint">{{.Agent}}</span>{{end}}
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="4" class="py-4 text-ink-soft">Nothing logged for this server yet.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{define "consentsPane"}}
+{{$t := .T}}
+<section class="px-5 pt-4 pb-8">
+  <div id="consentcards"
+       hx-get="/targets/{{$t.ID}}/consents/cards" hx-include="#ckn"
+       hx-trigger="every 3s" hx-swap="innerHTML">
+    {{template "consentCards" .}}
+  </div>
+</section>
+{{end}}
+
+{{define "consentCards"}}
+{{$t := .T}}
+<input type="hidden" id="ckn" name="known" value="{{.ConsentSig}}">
+
+<h3 class="font-semibold">Waiting on you <span class="font-normal text-ink-soft">{{len .Live}}</span></h3>
+{{range .Live}}
+<form hx-post="/consents/{{.ID}}" hx-target="#main" class="mt-3 max-w-2xl rounded-lg border border-warn bg-panel p-4">
+  {{template "consentBody" .}}
+</form>
+{{else}}
+<p class="mt-2 text-ink-soft">Nothing waiting. An ask lands here the moment an agent needs a capability it does not already hold.</p>
+{{end}}
+
+<h3 class="mt-8 font-semibold">Decisions <span class="font-normal text-ink-soft">{{len .History}}</span></h3>
+<table class="mt-2 w-full border-collapse text-left">
+  <thead class="text-xs text-ink-faint">
+    <tr class="border-b border-line">
+      <th class="py-1.5 pr-3 font-medium">When</th>
+      <th class="py-1.5 pr-3 font-medium">Outcome</th>
+      <th class="py-1.5 pr-3 font-medium">Agent</th>
+      <th class="py-1.5 pr-3 font-medium">Capabilities</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .History}}
+    <tr class="border-b border-line align-top">
+      <td class="whitespace-nowrap py-2 pr-3 font-mono text-xs text-ink-faint">{{time .CreatedAt}}</td>
+      <td class="whitespace-nowrap py-2 pr-3">
+        <span class="pill {{if eq .Status "approved"}}bg-ok-soft text-ok{{else if eq .Status "denied"}}bg-bad-soft text-bad{{else if eq .Status "pending"}}bg-warn-soft text-warn{{else}}bg-paper text-ink-faint{{end}}">{{.Status}}</span>
+        {{if .TTLMinutes}}<span class="ml-1 text-[11px] text-ink-faint">{{.TTLMinutes}}m</span>{{end}}
+      </td>
+      <td class="py-2 pr-3 text-xs">{{.AgentName}}</td>
+      <td class="py-2 pr-3">
+        <span class="font-mono text-xs">{{if .DecidedScopes}}{{join .DecidedScopes " "}}{{else}}{{join .Scopes " "}}{{end}}</span>
+        {{if .Intent}}<span class="block text-xs text-ink-faint">why: {{.Intent}}</span>{{end}}
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="4" class="py-4 text-ink-soft">No decisions recorded for this server yet.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{/* consentBody is one ask's whole decision form, minus the <form> tag — so the Consents tab
+     and the dashboard-wide popup always offer exactly the same choices. */}}
+{{define "consentBody"}}
+<input type="hidden" name="target" value="{{.TargetID}}">
+<div class="flex items-baseline gap-2">
+  <span class="pill bg-warn-soft text-warn">waiting</span>
+  <span class="font-medium">{{.AgentName}}</span>
+  <span class="pill bg-paper text-ink-soft">{{.TargetID}}</span>
+  <span class="font-mono text-[11px] text-ink-faint">{{.ID}}</span>
+</div>
+{{if .Headline}}<p class="mt-2 whitespace-pre-wrap">{{.Headline}}</p>{{end}}
+{{if .Intent}}<p class="mt-1 text-xs text-ink-soft">why: {{.Intent}}</p>{{end}}
+{{range .OverAskWarnings}}<p class="mt-1 text-xs text-warn">{{.}}</p>{{end}}
+
+<p class="mt-3 text-xs font-medium text-ink-soft">Grant which capabilities</p>
+{{range .Scopes}}
+<label class="mt-1.5 flex cursor-pointer items-start gap-2.5">
+  <input type="checkbox" name="scope" value="{{.Scope}}" checked class="mt-1 size-4 accent-accent">
+  <span class="min-w-0 flex-1">
+    <span class="flex items-baseline gap-2">
+      <span class="font-mono text-xs font-medium">{{.Scope}}</span>
+      {{if .Risk}}<span class="pill {{if eq .Risk "high"}}bg-bad-soft text-bad{{else if eq .Risk "medium"}}bg-warn-soft text-warn{{else}}bg-ok-soft text-ok{{end}}">{{.Risk}}</span>{{end}}
+    </span>
+    {{if .Human}}<span class="block text-xs text-ink-soft">{{.Human}}</span>{{end}}
+    {{range .Warnings}}<span class="block text-xs text-warn">{{.}}</span>{{end}}
+  </span>
+</label>
+{{end}}
+
+<div class="mt-4 flex flex-wrap items-end gap-3">
+  <span>
+    <label class="block text-xs text-ink-soft" for="ttl-{{.ID}}">For how long</label>
+    <select class="input mt-1 w-28" id="ttl-{{.ID}}" name="ttl">
+      {{$def := .TTLDefaultMin}}
+      {{range .TTLOptions}}<option value="{{.Minutes}}" {{if eq .Minutes $def}}selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </span>
+  <span>
+    <label class="block text-xs text-ink-soft" for="b-{{.ID}}">Spend ceiling (USD)</label>
+    <input class="input mt-1 w-32" id="b-{{.ID}}" name="budget" type="number" step="0.01" min="0" placeholder="none">
+  </span>
+  <span class="ml-auto flex gap-2">
+    <button class="btn" name="action" value="deny" type="submit">Deny</button>
+    <button class="btn btn-primary" name="action" value="approve" type="submit">Approve</button>
+  </span>
+</div>
+{{end}}
+
+{{/* consentPopup is the dashboard-wide interrupt: an agent is blocked right now, so it is
+     shown over whatever you were doing. Only the oldest ask is actionable at a time. */}}
+{{define "consentPopup"}}
+<input type="hidden" id="pkn" name="known" value="{{.ConsentSig}}">
+{{/* Guarded, not `with index .Live 0`: indexing an empty list errors, the handler 500s, and
+     htmx ignores error responses — which would leave a decided modal on screen forever. */}}
+{{if .Live}}
+{{$ask := index .Live 0}}
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+  <form hx-post="/consents/{{$ask.ID}}" hx-target="#consentpop" hx-swap="innerHTML"
+        class="w-full max-w-lg rounded-lg border border-warn bg-panel p-5 shadow-xl">
+    <input type="hidden" name="popup" value="1">
+    <p class="text-xs text-ink-soft">An agent is waiting on you</p>
+    {{if .Error}}<p class="mt-2 rounded-md bg-bad-soft px-3 py-2 text-bad">{{.Error}}</p>{{end}}
+    {{template "consentBody" $ask}}
+    {{if gt (len .Live) 1}}<p class="mt-3 text-xs text-ink-faint">{{len .Live}} asks waiting — the next appears after you decide this one.</p>{{end}}
+  </form>
+</div>
+{{end}}
+{{end}}

@@ -152,6 +152,31 @@ func CreateTarget(ctx context.Context, st store.Store, secrets Secrets, in Creat
 	return &CreateTargetResult{ID: in.ID, Owner: in.Owner, Scopes: scopes, Tools: len(in.Tools)}, nil
 }
 
+// DeleteTarget removes a target completely: its sealed credential and any OAuth client secret
+// first (those live in the SecretStore, not the store rows), then the target and everything
+// keyed to it. Receipts and activity events survive — the audit trail of what an agent did
+// under this target should not vanish because the target did.
+//
+// Secret deletion is best-effort and logged: an orphaned sealed blob is inert (nothing
+// references it), so it must not block removing the target the operator asked to remove.
+func DeleteTarget(ctx context.Context, st store.Store, secrets Secrets, id string) error {
+	t, err := st.GetTarget(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t.CredentialRef != "" {
+		if err := secrets.Delete(ctx, t.CredentialRef); err != nil {
+			log.Printf("⚠️ provision: delete target %q: credential %q: %v", id, t.CredentialRef, err)
+		}
+	}
+	if oc, err := st.GetOAuthClient(ctx, id); err == nil && oc.ClientSecretRef != "" {
+		if err := secrets.Delete(ctx, oc.ClientSecretRef); err != nil {
+			log.Printf("⚠️ provision: delete target %q: client secret %q: %v", id, oc.ClientSecretRef, err)
+		}
+	}
+	return st.DeleteTarget(ctx, id)
+}
+
 // PromoteOAuthPending moves a target-less pending OAuth registration onto a freshly-created
 // target: it consumes the pending row (single-use), re-seals the obtained TokenSet under the
 // target's credential ref ("cred:<id>") so oauthSource can refresh it, re-seals the client
@@ -268,12 +293,18 @@ func BuildAdapter(id string, tools []ToolSpec) json.RawMessage {
 		rule("mcp.tools.list", "tools/list", "", "read", []string{"mcp:connect"}),
 		rule("mcp.resources.list", "resources/list", "", "read", []string{"mcp:connect"}),
 	}
+	var unclassified []string
 	for _, t := range tools {
 		if t.Scope == "" || IsUnknown(t.Effect) {
+			// No rule: the call falls through to `default: unknown` and is refused, which is
+			// the behaviour we want. But the tool must not VANISH — an operator cannot classify
+			// what no surface can show them. Its name is recorded below, display-only.
+			unclassified = append(unclassified, t.Name)
 			continue
 		}
 		classify = append(classify, rule("tool."+t.Name, "tools/call", t.Name, t.Effect, []string{t.Scope}))
 	}
+	sort.Strings(unclassified)
 	// reverse channel — server drives client; denied unless explicitly granted.
 	classify = append(classify,
 		sseRule("server.sampling", "sampling/createMessage", "external", []string{"mcp:sampling"}),
@@ -286,6 +317,12 @@ func BuildAdapter(id string, tools []ToolSpec) json.RawMessage {
 		"version":  "1.0.0",
 		"classify": classify,
 		"default":  map[string]any{"effect": "unknown"},
+	}
+	// Display-only, like semantics and descriptions below: the enforcement parse ignores keys it
+	// does not know, so naming the refused tools NEVER grants anything. It only means the policy
+	// editor can list them instead of silently forgetting they exist.
+	if len(unclassified) > 0 {
+		doc["unclassified"] = unclassified
 	}
 	// Display-only curated semantics ride as a sibling of `classify`. The enforcement parse
 	// (core.Adapter) ignores unknown keys, so this NEVER affects authority; loadConfig extracts it

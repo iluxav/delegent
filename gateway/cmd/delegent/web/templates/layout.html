@@ -1,0 +1,137 @@
+{{define "page"}}<!doctype html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delegent</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js"></script>
+</head>
+<body class="h-full overflow-hidden bg-paper font-sans text-sm text-ink antialiased">
+<div class="flex h-full">
+  <aside id="side" class="flex shrink-0 flex-col bg-panel" style="width:20rem">
+    <div class="flex items-baseline justify-between px-4 pt-4 pb-3">
+      <h1 class="text-base font-semibold tracking-tight"><a href="/" hx-boost="true">Delegent</a></h1>
+      <span class="text-xs text-ink-faint">{{.Version}}</span>
+    </div>
+    <div id="targets" class="flex min-h-0 flex-1 flex-col" hx-get="/targets?s={{.Selected}}" hx-trigger="targets from:body" hx-swap="innerHTML">
+      {{template "sidebarTargets" .}}
+    </div>
+    <div class="flex items-center justify-between border-t border-line px-4 py-3 text-xs text-ink-soft">
+      <span>{{.User}}</span>
+      <form method="post" action="/logout"><button class="hover:text-ink">Sign out</button></form>
+    </div>
+  </aside>
+  <div class="grip" data-resize="side" data-edge="left" title="Drag to resize"></div>
+  <main id="main" class="flex min-w-0 flex-1 flex-col overflow-y-auto">
+    {{.Main}}
+  </main>
+  <div class="grip" data-resize="connect" data-edge="right" title="Drag to resize"></div>
+  <aside id="connect" class="flex shrink-0 flex-col bg-panel" style="width:26rem"
+         hx-get="/connect" hx-trigger="keys from:body" hx-swap="innerHTML">
+    {{.Connect}}
+  </aside>
+</div>
+<div id="consentpop" hx-get="/consents/live" hx-include="#pkn" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
+<script>
+  // A blocked agent should be visible from a background tab too.
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.target && e.target.id === 'consentpop') {
+      var n = e.target.querySelectorAll('form[hx-post^="/consents/"]').length;
+      document.title = n ? '(' + n + ') Delegent — approval needed' : 'Delegent';
+    }
+  });
+
+  // Panes resize by dragging the grip beside them; each width is remembered per browser.
+  document.querySelectorAll('.grip').forEach(function (grip) {
+    var pane = document.getElementById(grip.dataset.resize), right = grip.dataset.edge === 'right';
+    try { var saved = localStorage.getItem('delegent.' + grip.dataset.resize); if (saved) pane.style.width = saved + 'px'; } catch (e) {}
+    grip.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var x0 = e.clientX, w0 = pane.getBoundingClientRect().width;
+      function move(ev) {
+        var d = right ? x0 - ev.clientX : ev.clientX - x0;
+        pane.style.width = Math.min(Math.max(w0 + d, 224), 720) + 'px';
+      }
+      function up() {
+        document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+        document.body.classList.remove('resizing');
+        try { localStorage.setItem('delegent.' + grip.dataset.resize, Math.round(pane.getBoundingClientRect().width)); } catch (e) {}
+      }
+      document.body.classList.add('resizing');
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+    });
+  });
+
+  // Delegated, so it keeps working after htmx swaps a pane's contents.
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (el.matches && el.matches('select[data-fx]')) el.className = el.className.replace(/\bfx-\w+/, 'fx-' + el.value);
+  });
+  document.addEventListener('click', function (e) {
+    var tab = e.target.closest('.ctab');
+    if (tab) {
+      var root = tab.closest('#connect');
+      root.querySelectorAll('.ctab').forEach(function (t) { t.classList.toggle('ctab-on', t === tab); });
+      root.querySelectorAll('.client-pane').forEach(function (p) { p.classList.toggle('hidden', p.dataset.client !== tab.dataset.client); });
+      return;
+    }
+    var copy = e.target.closest('[data-copy]');
+    if (copy) {
+      var src = document.querySelector(copy.dataset.copy);
+      if (!src) return;
+      var text = src.textContent, done = function () { var was = copy.textContent; copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = was; }, 1200); };
+      // clipboard API needs a secure context; localhost qualifies, a LAN address does not.
+      if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done); return; }
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } finally { ta.remove(); }
+    }
+  });
+</script>
+</body>
+</html>{{end}}
+
+{{define "sidebarTargets"}}
+<nav class="min-h-0 flex-1 overflow-y-auto px-2">
+  {{range .Targets}}
+  <a href="/targets/{{.ID}}" hx-get="/targets/{{.ID}}" hx-target="#main" hx-push-url="true"
+     class="mb-0.5 flex items-start gap-2.5 rounded-md px-2 py-2 hover:bg-paper {{if eq $.Selected .ID}}bg-accent-soft hover:bg-accent-soft{{end}}">
+    <span class="mt-1.5 size-2 shrink-0 rounded-full {{if .Enabled}}bg-ok{{else}}border border-ink-faint{{end}}" title="{{if .Enabled}}enabled{{else}}disabled{{end}}"></span>
+    <span class="min-w-0 flex-1">
+      <span class="flex items-baseline gap-2">
+        <span class="truncate font-medium">{{.Name}}</span>
+        <span class="shrink-0 text-[11px] text-ink-faint">{{.Tools}} tools</span>
+      </span>
+      <span class="block truncate font-mono text-[11px] text-ink-soft">{{.Endpoint}}</span>
+    </span>
+  </a>
+  {{else}}
+  <p class="px-2 py-3 text-ink-soft">No MCP servers yet.</p>
+  {{end}}
+</nav>
+<div class="px-3 pb-3">
+  <a href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true" class="btn w-full justify-center {{if eq .Selected "new"}}btn-primary{{end}}">Add MCP server</a>
+</div>
+{{end}}
+
+{{define "empty"}}
+<div class="flex flex-1 items-center justify-center p-8">
+  <div class="max-w-md">
+    {{if .Gone}}
+    <h2 class="text-lg font-semibold">{{.Gone}} removed</h2>
+    <p class="mt-2 text-ink-soft">Its policy, scopes and credential are gone, and agents no longer see its tools. What ran through it is still in the activity log.</p>
+    {{else if .Missing}}
+    <h2 class="text-lg font-semibold">No target named {{.Missing}}</h2>
+    <p class="mt-2 text-ink-soft">Pick one on the left, or add it.</p>
+    {{else if .Count}}
+    <h2 class="text-lg font-semibold">Pick a server to review</h2>
+    <p class="mt-2 text-ink-soft">Each server's policy is the mapping from its tools to an effect and a scope. Agents can only be granted scopes you leave on, and a tool with no effect is refused until you classify it.</p>
+    {{else}}
+    <h2 class="text-lg font-semibold">Add your first MCP server</h2>
+    <p class="mt-2 text-ink-soft">Delegent introspects it, drafts a policy per tool, and puts every call behind consent. You review the draft here.</p>
+    {{end}}
+  </div>
+</div>
+{{end}}
