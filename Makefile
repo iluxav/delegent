@@ -6,11 +6,15 @@
 #   make inspector          build inspector/mcp-inspector (the MCP inspector web app)
 #   make install-inspector  build it, then copy it into BINDIR
 #   make css                recompile the inspector's and the dashboard's Tailwind sheets (downloads the CLI once)
+#   make init               go run 'delegent init' (first run: ~/.delegent, master key, config)
+#   make dashboard          go run the terminal dashboard (delegent dashboard) from source
+#   make serve              go run the gateway + web dashboard (http://127.0.0.1:8090/) from source
 #   make test               vet + test every module, like CI
 #   make clean              delete the local build artifacts
 #
 # Override the destination:   make install BINDIR=$$HOME/.local/bin
 # Override the version stamp: make install VERSION=v9.9.9
+# Pass extra flags to a run:  make serve ARGS="--addr 127.0.0.1:9000"
 #
 # The build runs inside the go.work workspace, so the gateway compiles against the sibling
 # protocol/ directory rather than the tagged release pinned in gateway/go.mod. Build targets
@@ -36,7 +40,7 @@ PROTOCOL_BIN  := protocol/delegent-proto
 INSPECTOR_BIN := inspector/mcp-inspector
 BINS          := $(GATEWAY_BIN) $(PROTOCOL_BIN)
 
-.PHONY: all build build-gateway build-protocol install uninstall inspector install-inspector css test clean
+.PHONY: all build build-gateway build-protocol install uninstall inspector install-inspector init dashboard serve css test clean
 
 # install-bins copies the given binaries into BINDIR, escalating only when it has to.
 define install-bins
@@ -85,6 +89,17 @@ inspector:
 
 install-inspector: inspector
 	$(call install-bins,$(INSPECTOR_BIN))
+
+# Run straight from source (no install). Templates and CSS are embedded at compile time, so
+# a template or `make css` change shows up on the next run.
+init:
+	cd gateway && go run -ldflags "$(LDFLAGS)" ./cmd/delegent init $(ARGS)
+
+dashboard:
+	cd gateway && go run -ldflags "$(LDFLAGS)" ./cmd/delegent dashboard $(ARGS)
+
+serve:
+	cd gateway && go run -ldflags "$(LDFLAGS)" ./cmd/delegent serve $(ARGS)
 
 # The standalone Tailwind CLI bundles the framework, so no package.json or node_modules is
 # needed. It is downloaded once into inspector/.cache (gitignored) for this OS/arch.

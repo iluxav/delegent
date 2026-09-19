@@ -46,6 +46,7 @@ type discovery struct {
 	Required                                          bool
 	Issuer, AuthEndpoint, TokenEndpoint, Registration string
 	Scopes                                            []string
+	Resource                                          string // what the server calls itself; the token is requested for this
 }
 
 // probeAuth asks the MCP endpoint, unauthenticated, whether it needs OAuth. A 401 carrying
@@ -120,10 +121,11 @@ func discoverOAuth(ctx context.Context, endpoint string) (*discovery, error) {
 	// 2. protected-resource metadata names the authorization server
 	var issuers []string
 	for _, u := range prmURLs {
-		prm, err := oauthex.GetProtectedResourceMetadata(ctx, u, endpoint, client)
+		prm, err := resourceMetadata(ctx, u, endpoint, client)
 		if err != nil || prm == nil {
 			continue
 		}
+		d.Resource = prm.Resource
 		issuers = append(issuers, prm.AuthorizationServers...)
 		if len(prm.ScopesSupported) > 0 && len(d.Scopes) == 0 {
 			d.Scopes = prm.ScopesSupported
@@ -153,6 +155,32 @@ func discoverOAuth(ctx context.Context, endpoint string) (*discovery, error) {
 		}
 	}
 	return d, errors.New("the server asks for OAuth but its authorization-server metadata could not be read — add it with a token instead")
+}
+
+// resourceMetadata fetches protected-resource metadata for endpoint. RFC 9728 wants the
+// document to name the endpoint exactly, but some servers name their origin while serving MCP
+// under a path (DigitalOcean: resource https://apps.mcp.digitalocean.com, endpoint …/mcp).
+// The origin is accepted too — the document is still the one this server pointed us at, so
+// it trusts nothing new — and the name it gives becomes the resource the token is asked for.
+func resourceMetadata(ctx context.Context, metaURL, endpoint string, c *http.Client) (*oauthex.ProtectedResourceMetadata, error) {
+	prm, err := oauthex.GetProtectedResourceMetadata(ctx, metaURL, endpoint, c)
+	if err == nil {
+		return prm, nil
+	}
+	u, perr := url.Parse(endpoint)
+	if perr != nil {
+		return nil, err
+	}
+	origin := u.Scheme + "://" + u.Host
+	for _, alt := range []string{origin, origin + "/"} {
+		if alt == endpoint {
+			continue
+		}
+		if prm, aerr := oauthex.GetProtectedResourceMetadata(ctx, metaURL, alt, c); aerr == nil {
+			return prm, nil
+		}
+	}
+	return nil, err
 }
 
 // redirectURI is where the provider sends the operator back. It must match what we register.
@@ -201,10 +229,14 @@ func (w *webApp) beginOAuth(ctx context.Context, d *discovery, add pendingAdd) (
 	}
 	w.rememberAdd(state, add)
 
+	resource := d.Resource
+	if resource == "" {
+		resource = add.Endpoint
+	}
 	return oauth.AuthorizeURL(oauth.AuthorizeInput{
 		AuthEndpoint: d.AuthEndpoint, ClientID: reg.ClientID, RedirectURI: w.redirectURI(),
 		Scopes: d.Scopes, State: state, CodeChallenge: oauth.CodeChallengeS256(verifier),
-		Resource: add.Endpoint, // RFC 8707: the token is for THIS MCP server
+		Resource: resource, // RFC 8707: the token is for THIS MCP server
 	}), nil
 }
 

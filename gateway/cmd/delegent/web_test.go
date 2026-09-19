@@ -358,8 +358,9 @@ func TestDashboardTabs(t *testing.T) {
 
 // fakeOAuthServers stands up an MCP server that demands OAuth and the authorization server it
 // points at: protected-resource metadata, authorization-server metadata, dynamic registration,
-// and a token endpoint. Returns the MCP endpoint URL.
-func fakeOAuthServers(t *testing.T, accessToken string) string {
+// and a token endpoint. Returns the MCP endpoint URL. hostResource makes the resource metadata
+// name the server's origin instead of its /mcp endpoint, the way DigitalOcean's does.
+func fakeOAuthServers(t *testing.T, accessToken string, hostResource bool) string {
 	t.Helper()
 	var asURL, rsURL string
 
@@ -400,7 +401,11 @@ func fakeOAuthServers(t *testing.T, accessToken string) string {
 	t.Cleanup(rs.Close)
 	rsURL = rs.URL
 	rsMux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"resource": rsURL + "/mcp", "authorization_servers": []string{asURL}})
+		resource := rsURL + "/mcp"
+		if hostResource {
+			resource = rsURL
+		}
+		writeJSON(w, map[string]any{"resource": resource, "authorization_servers": []string{asURL}})
 	})
 	rsMux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+accessToken {
@@ -413,6 +418,30 @@ func fakeOAuthServers(t *testing.T, accessToken string) string {
 	return rs.URL + "/mcp"
 }
 
+// TestDashboardOAuthHostResource: resource metadata that names the server's origin rather than
+// its /mcp endpoint still leads to sign-in, and the token is requested for that origin.
+func TestDashboardOAuthHostResource(t *testing.T) {
+	endpoint := fakeOAuthServers(t, "tok-host", true)
+	origin := strings.TrimSuffix(endpoint, "/mcp")
+	ts, _, logs := newDashboard(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+
+	res, body := post(t, c, ts.URL+"/targets", url.Values{"name": {"Host Named"}, "endpoint": {endpoint}}, true)
+	if res.StatusCode != 204 {
+		t.Fatalf("expected a redirect to the provider, got %d:\n%s", res.StatusCode, body)
+	}
+	authURL, err := url.Parse(res.Header.Get("HX-Redirect"))
+	if err != nil || authURL.Path != "/authorize" {
+		t.Fatalf("not an authorize URL: %q (%v)", res.Header.Get("HX-Redirect"), err)
+	}
+	if got := authURL.Query().Get("resource"); got != origin {
+		t.Errorf("resource indicator should be what the server calls itself (%q), got %q", origin, got)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -422,7 +451,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 // discovers its authorization server, registers a client, and hands back an authorize URL; the
 // provider's callback then exchanges the code and creates the target with a sealed token.
 func TestDashboardOAuthAdd(t *testing.T) {
-	endpoint := fakeOAuthServers(t, "tok-abc123")
+	endpoint := fakeOAuthServers(t, "tok-abc123", false)
 	ts, e, logs := newDashboard(t)
 	c := browser(t)
 	get(t, c, ts.URL+"/setup")
@@ -863,5 +892,47 @@ func TestDashboardConsentChannels(t *testing.T) {
 	}
 	if k, _ := e.st.GetAgentKey(ctx, id); len(k.ConsentChannels) != 0 {
 		t.Errorf("a refused policy must not be stored, got %v", k.ConsentChannels)
+	}
+}
+
+func TestDashboardCatalog(t *testing.T) {
+	up := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1"}, nil)
+	upstream := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return up }, nil))
+	defer upstream.Close()
+
+	ts, e, logs := newDashboard(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+
+	// every tile posts its endpoint to the ordinary add flow, and its logo is served
+	_, body := get(t, c, ts.URL+"/targets/new")
+	for _, s := range popularServers {
+		if !strings.Contains(body, `value="`+s.Endpoint+`"`) {
+			t.Errorf("add page has no tile for %s", s.Name)
+		}
+		if code, _ := get(t, c, ts.URL+"/static/brands/"+s.ID+".svg"); code != 200 {
+			t.Errorf("logo for %s: %d", s.Name, code)
+		}
+	}
+	if strings.Contains(body, "is-added") {
+		t.Fatal("nothing is connected yet, so no tile should say Added")
+	}
+
+	// a target already on a catalog endpoint turns that tile into a link to it
+	post(t, c, ts.URL+"/targets", url.Values{"name": {"work notes"}, "endpoint": {upstream.URL}, "credential": {"tok"}}, true)
+	ctx := context.Background()
+	tgt, err := e.st.GetTarget(ctx, "work-notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt.Endpoint = popularServers[0].Endpoint
+	if err := e.st.PutTarget(ctx, tgt); err != nil {
+		t.Fatal(err)
+	}
+	_, body = get(t, c, ts.URL+"/targets/new")
+	if !strings.Contains(body, `href="/targets/work-notes"`) || strings.Contains(body, `value="`+popularServers[0].Endpoint+`"`) {
+		t.Fatal("a connected catalog server should link to its target instead of offering sign-in")
 	}
 }

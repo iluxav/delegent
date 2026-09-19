@@ -70,7 +70,10 @@
   <span class="eyebrow">Connect a server</span><h2>Add an MCP server</h2>
   <p class="text-ink-soft">Bring your tools into Delegent. We’ll discover the server’s tools and draft a policy for you to review.</p>
   {{if .Error}}<p class="mt-4 rounded-lg bg-bad-soft px-3 py-2 text-bad" role="alert">{{.Error}}</p>{{end}}
-  <form hx-post="/targets" hx-target="#main" hx-indicator="#adding" hx-disabled-elt="find button[type='submit']" class="mt-5">
+  <div class="add-layout">
+  <section class="add-custom" aria-labelledby="custom-heading">
+  <h3 id="custom-heading" class="add-heading">Custom server</h3>
+  <form hx-post="/targets" hx-target="#main" hx-indicator="#adding" hx-disabled-elt="find button[type='submit']">
     <label class="block font-medium" for="name">Server name</label><p class="text-xs text-ink-faint">Tools appear to agents as <code><span id="slug">name</span>__&lt;tool&gt;</code>.</p>
     <input class="input" id="name" name="name" value="{{.Name}}" placeholder="e.g. GitHub" required autofocus autocomplete="off">
     <label class="mt-5 block font-medium" for="endpoint">MCP endpoint</label><p class="text-xs text-ink-faint">The server’s Streamable HTTP URL.</p>
@@ -78,5 +81,27 @@
     <details><summary>Use an access token <span class="text-ink-faint">· optional</span></summary><p class="mt-3 text-xs leading-relaxed text-ink-soft">If your server supports OAuth, leave this empty and we’ll take you to its sign-in page. Only paste a token if the server provides one directly.</p><label class="mt-3 block font-medium" for="credential">Access token</label><input class="input font-mono text-xs" id="credential" name="credential" type="password" autocomplete="off"><p class="mt-2 text-xs text-ink-faint">Credentials are sealed in your gateway.</p></details>
     <div class="mt-6 flex flex-wrap items-center gap-3"><button class="btn btn-primary" type="submit">Connect and discover tools <span aria-hidden="true">→</span></button><span id="adding" class="htmx-indicator text-xs text-ink-soft" role="status">Connecting to the endpoint…</span></div>
   </form>
+  </section>
+  <section class="add-catalog" aria-labelledby="catalog-heading">
+  <h3 id="catalog-heading" class="add-heading">Popular servers</h3>
+  <p class="text-xs text-ink-faint">Sign in with your account — no token needed.</p>
+  <ul class="catalog-grid">
+    {{range .Catalog}}<li>
+    {{if .AddedAs}}<a class="catalog-tile is-added" href="/targets/{{.AddedAs}}" hx-get="/targets/{{.AddedAs}}" hx-target="#main" hx-push-url="true">
+      <span class="catalog-logo" style="--logo: url('/static/brands/{{.ID}}.svg')" aria-hidden="true"></span>
+      <span class="catalog-text"><span class="catalog-name">{{.Name}}</span><span class="catalog-blurb">{{.Blurb}}</span></span>
+      <span class="catalog-state">Added</span>
+    </a>{{else}}<form class="h-full" hx-post="/targets" hx-target="#main" hx-disabled-elt="find button">
+      <input type="hidden" name="name" value="{{.Name}}"><input type="hidden" name="endpoint" value="{{.Endpoint}}">
+      <button class="catalog-tile" type="submit" title="Sign in to {{.Name}} · {{.Endpoint}}" aria-label="Sign in to {{.Name}}">
+        <span class="catalog-logo" style="--logo: url('/static/brands/{{.ID}}.svg')" aria-hidden="true"></span>
+        <span class="catalog-text"><span class="catalog-name">{{.Name}}</span><span class="catalog-blurb">{{.Blurb}}</span></span>
+        <span class="catalog-state"><span class="catalog-go" aria-hidden="true">→</span><span class="catalog-wait" role="status">Opening…</span></span>
+      </button>
+    </form>{{end}}
+    </li>{{end}}
+  </ul>
+  </section>
+  </div>
 </div>
 {{end}}

@@ -350,10 +350,11 @@ func (w *webApp) withError(rw http.ResponseWriter, r *http.Request, v *targetVie
 type newTargetForm struct {
 	Name, Endpoint string
 	Error          string
+	Catalog        []catalogTile
 }
 
 func (w *webApp) newTargetPage(rw http.ResponseWriter, r *http.Request) {
-	w.page(rw, r, "new", "newTarget", newTargetForm{})
+	w.page(rw, r, "new", "newTarget", newTargetForm{Catalog: w.catalogTiles(r)})
 }
 
 // createTarget is target add: introspect the endpoint, accept the drafted classification, and
@@ -459,5 +460,6 @@ func (w *webApp) removeTarget(rw http.ResponseWriter, r *http.Request) {
 
 func (w *webApp) addFailed(rw http.ResponseWriter, r *http.Request, f newTargetForm, msg string) {
 	f.Error = msg
+	f.Catalog = w.catalogTiles(r)
 	w.page(rw, r, "new", "newTarget", f)
 }
