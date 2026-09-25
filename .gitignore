@@ -7,3 +7,6 @@ cacert.pem
 inspector/mcp-inspector
 inspector/.cache/
 gateway/cmd/delegent/delegent
+agents/demo-agent
+agents/demo-call
+agents/web-mcp

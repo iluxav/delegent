@@ -52,7 +52,7 @@ func evTone(typ string) string {
 // skip a swap when nothing has changed.
 func (w *webApp) events(r *http.Request, targetID, typ string) ([]eventView, string) {
 	rows, err := w.e.st.ListEvents(r.Context(), store.EventFilter{
-		UserID: w.e.operator, TargetID: targetID, Type: typ, Limit: 200,
+		UserID: w.e.operator, TargetID: targetID, Type: typ, Limit: store.EventLimitAll, // the whole history, never a page
 	})
 	if err != nil || len(rows) == 0 {
 		return nil, "empty"

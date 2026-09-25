@@ -201,7 +201,7 @@ func (g *Gateway) pendingView(pc pendingConsent) PendingView {
 	}
 	return PendingView{
 		ID: pc.ID, TargetID: g.targetID, Principal: pc.Principal,
-		AgentName:       g.br.AgentDisplayName(g.resumeSession(pc.ConnID)),
+		AgentName:       g.callerOfPending(pc),
 		Scopes:          scopes,
 		Reason:          pc.Reason,
 		Headline:        pc.Headline,
@@ -300,7 +300,8 @@ func (g *Gateway) consoleRequestAccess(ctx context.Context, connID, reason strin
 // abandons the record — the persisted row (and its TTL) is the durable state.
 func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason string, scopes []string, retryHint string, meta callMeta) *mcp.CallToolResult {
 	principal := g.principalOf(ctx)
-	headline := consentHeadline(g.br.AgentDisplayName(g.resumeSession(connID)), meta) + "\n"
+	caller, label := g.callerName(ctx, g.resumeSession(connID))
+	headline := consentHeadline(caller, meta) + "\n"
 	cr := g.cp.DescribeConsent(principal, scopes, reason)
 	displayHeadline := strings.TrimSuffix(headline, "\n")
 	if len(cr.Scopes) == 0 {
@@ -315,7 +316,9 @@ func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason stri
 	// The same legible display the in-chat dialogs render travels with the record: onto the
 	// live view (console card) and the durable row (approvals history, telegram) — parity.
 	g.pending.setDisplay(pc.ID, displayHeadline, meta.Intent)
-	pc.Headline, pc.Intent = displayHeadline, meta.Intent
+	_, keyName, _ := keyIdentityFromContext(ctx)
+	g.pending.setCaller(pc.ID, caller, label, keyName)
+	pc.Headline, pc.Intent, pc.Caller, pc.Label, pc.Key = displayHeadline, meta.Intent, caller, label, keyName
 	g.pending.setWaiting(pc.ID, true)
 	view := g.pendingView(pc)
 	g.persistPending(pc, view.AgentName)
@@ -370,6 +373,11 @@ func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason stri
 		return text(headline + "✅ DELEGENT: a human granted access at the console. " + outcome.message + " " + retryHint)
 	}
 	if decided {
+		if !strings.Contains(outcome.message, "Declined") {
+			// The human said yes but the mint refused (a structural limit, not a decision).
+			log.Printf("🔒 %s console consent %s approved but NOT granted — %s", label, pc.ID, outcome.message)
+			return toolError("🔒 DELEGENT: " + label + " was approved at the console but could not be granted — " + outcome.message)
+		}
 		log.Printf("🔒 %s console consent %s DENIED at the console", label, pc.ID)
 		return toolError("🔒 DELEGENT: a human DENIED " + label + " at the console — no access. " + outcome.message)
 	}

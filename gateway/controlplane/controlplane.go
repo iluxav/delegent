@@ -11,8 +11,10 @@ package controlplane
 import (
 	"context"
 	"log"
+	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -103,6 +105,9 @@ func (cp *ControlPlane) PublicKeyOf(principal string) (string, bool) {
 }
 func (cp *ControlPlane) Adapter() core.Adapter { return cp.o.Adapter }
 
+// Vendor is the target this control plane mints for — the slip's vendor field.
+func (cp *ControlPlane) Vendor() string { return cp.o.Vendor }
+
 // AllScopes is the scope universe this vendor advertises: the sorted keys of the advisor's
 // per-scope descriptions. plan_access asks for all of them, then DescribeConsent filters to
 // the grantable subset for the principal. Empty when the target has no advisor.
@@ -167,7 +172,9 @@ func (cp *ControlPlane) DescribeConsent(principal string, requested []string, re
 	needed := cp.requiredScopes(reason)
 	var overAsk, overAskWarnings []string
 	for _, s := range requested {
-		if !contains(needed, s) {
+		// Over-ask is "more than the stated task needs": with no intent hints (a target provisioned
+		// from a draft) there is no basis for the claim, so nothing is flagged.
+		if len(needed) > 0 && !contains(needed, s) {
 			overAsk = append(overAsk, s)
 			overAskWarnings = append(overAskWarnings, "⚠️ Requesting '"+s+"', but the stated task only requires: "+strings.Join(needed, ", ")+".")
 		}
@@ -222,11 +229,28 @@ func (cp *ControlPlane) Decide(principal string, requested []string, reason stri
 	return granted, answer.TTLMinutes, answer.BudgetUSD, ""
 }
 
+// RecordDeny writes a deny receipt for a request that never reached consent (a structural
+// refusal such as an exhausted delegation depth), so the audit trail shows the ask.
+func (cp *ControlPlane) RecordDeny(principal string, requested []string, msg string) {
+	cp.record(store.Receipt{Principal: principal, Tool: "request_access", Scopes: requested, Decision: "deny", Reason: msg, CreatedAt: cp.now()})
+}
+
 // MintFor mints a root slip binding the granted scopes to callerPub, with an explicit
 // expiry and budget. A new session passes exp = now + ttl; augmenting an existing session
 // passes its ORIGINAL exp, so extending scope never resets the clock. Records a grant
 // receipt.
 func (cp *ControlPlane) MintFor(principal, callerPub string, granted []string, exp int64, budget float64) (core.Chain, core.Effect, error) {
+	return cp.MintRoot(principal, callerPub, granted, exp, budget, RootDepth(), "")
+}
+
+// MintRoot is MintFor with an explicit remaining-delegation depth and an optional lineage
+// note for the receipt ("under sess_…": the caller's own session this grant is a child of;
+// "escalated from sess_…": a human-granted escalation). Depth 0 mints a slip that can never
+// be narrowed — the shape every escalated or leaf grant takes.
+func (cp *ControlPlane) MintRoot(principal, callerPub string, granted []string, exp int64, budget float64, depth int, lineage string) (core.Chain, core.Effect, error) {
+	if depth < 0 {
+		depth = 0
+	}
 	effects, methods := cp.powerOf(granted)
 	body := core.SlipBody{
 		V: 1, Iss: principal, Aud: callerPub, Vendor: cp.o.Vendor,
@@ -236,7 +260,7 @@ func (cp *ControlPlane) MintFor(principal, callerPub string, granted []string, e
 		Resources: []string{""},
 		Budget:    budget,
 		Exp:       exp,
-		Depth:     2,
+		Depth:     depth,
 		Nonce:     cp.nonce(),
 	}
 	signer, err := cp.o.RootKeys.Signer(principal)
@@ -247,7 +271,11 @@ func (cp *ControlPlane) MintFor(principal, callerPub string, granted []string, e
 	if err != nil {
 		return nil, 0, err
 	}
-	cp.record(store.Receipt{Principal: principal, Tool: "request_access", Scopes: granted, Effect: core.EffectNames(effects), Decision: "grant", Reason: "ok", CreatedAt: cp.now()})
+	reason := "ok"
+	if lineage != "" {
+		reason = "ok; " + lineage
+	}
+	cp.record(store.Receipt{Principal: principal, Tool: "request_access", Scopes: granted, Effect: core.EffectNames(effects), Decision: "grant", Reason: reason, CreatedAt: cp.now()})
 	return core.Chain{slip}, effects, nil
 }
 
@@ -376,4 +404,21 @@ func subset(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// DefaultRootDepth is how many sub-delegations a human-minted root slip allows: a harness
+// (depth 2) can hand to an agent (depth 1) that can hand to a leaf (depth 0). Every hop
+// through Delegent — narrow_access, or an agent calling on under the caller's session —
+// spends one.
+const DefaultRootDepth = 2
+
+// RootDepth is the root depth in force: DELEGENT_MAX_DEPTH when set to a non-negative
+// integer (read per mint; it is a deployment knob, not a hot path), else DefaultRootDepth.
+func RootDepth() int {
+	if v := os.Getenv("DELEGENT_MAX_DEPTH"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return DefaultRootDepth
 }

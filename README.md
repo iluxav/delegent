@@ -28,6 +28,12 @@ Point your MCP client (Claude Code, Claude Desktop, Cursor, …) at `delegent st
 and every vendor tool arrives consent-gated. Full walkthrough, HTTP/Docker deployment, and
 the approvals flow: [gateway/README.md](gateway/README.md).
 
+Your own agents go behind the same gateway: `delegent target add --kind a2a …` fronts an
+A2A agent's skills as tools, and an agent that calls other targets through delegent (echoing
+one header) gets its calls linked to the task it is working — consent, expiry, depth, and
+receipts across every hop. `agents/demo.sh` runs a four-agent demo; see
+[agents/README.md](agents/README.md).
+
 Verify a receipt trail offline — no gateway, no trust in this repo's binaries required:
 
 ```sh

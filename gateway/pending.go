@@ -40,10 +40,16 @@ type pendingConsent struct {
 	// (built via consentHeadline) and the agent's declared intent, stashed from the originating
 	// guarded call so serveConsentToken can render the same headline the elicitation dialog shows.
 	// Empty when the request had no originating tool call (a direct request_access) — fail-soft.
-	Headline  string
-	Intent    string
-	CreatedAt int64 // unix millis
-	ExpiresAt int64 // unix millis
+	Headline string
+	Intent   string
+	// Caller is the requesting caller's display name at park time (key name, target, and the
+	// parent hop it is working under, if any) — what the console card and the durable row show
+	// as the agent. Label is the session label minted on grant (see store.Session.Label).
+	Caller    string
+	Label     string
+	Key       string // the calling key's name, for the activity log of a later console decision
+	CreatedAt int64  // unix millis
+	ExpiresAt int64  // unix millis
 	used      bool
 	// done delivers the decision to a request_access call blocked on this record. Created
 	// EXACTLY ONCE, in findOrCreate's mint branch — every copy findOrCreate/consume hands out
@@ -145,6 +151,17 @@ func (p *pendingStore) setDisplay(id, headline, intent string) {
 	if pc, ok := p.m[id]; ok {
 		pc.Headline = headline
 		pc.Intent = intent
+	}
+}
+
+// setCaller stashes the caller's display name and the label the granted session will carry.
+func (p *pendingStore) setCaller(id, caller, label, key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pc, ok := p.m[id]; ok {
+		pc.Caller = caller
+		pc.Label = label
+		pc.Key = key
 	}
 }
 

@@ -142,3 +142,11 @@ func TestRiskPhrase(t *testing.T) {
 		}
 	}
 }
+
+func TestConsentHeadlineShowsAgentMessage(t *testing.T) {
+	m := callMeta{Tool: "send_email", ToolDesc: "send an email", Target: "mailer", Intent: "the user asked", Detail: "To: bob@acme.example Subject: hi"}
+	got := consentHeadline("agent:researcher@mailer", m)
+	if !strings.Contains(got, "Message: \"To: bob@acme.example Subject: hi\"") || !strings.Contains(got, "Why: \"the user asked\"") {
+		t.Errorf("headline = %q", got)
+	}
+}

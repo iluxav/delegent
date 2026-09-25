@@ -2,11 +2,14 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/store"
 )
 
@@ -119,5 +122,44 @@ func TestAggregatePropagatesCapsAndPolicy(t *testing.T) {
 	}
 	if got, _ := a.resolveTarget("conn1", ""); got != "gh" {
 		t.Fatalf("prepareCall should note the target: %q", got)
+	}
+}
+
+// A target whose gateway cannot be built (an agent not up yet) is skipped, and the shrunken
+// aggregate is retried after its grace period instead of being served until the next config
+// change.
+func TestAggregateRetriesMissingTargets(t *testing.T) {
+	r := aggFixture(t)
+	// Take tv's built instance away and make its build fail: the first aggregate lacks it.
+	tv := r.slots["tv"].gw
+	r.slots["tv"].gw = nil
+	fail := true
+	r.build = func(context.Context, store.Store, keyring.Sealer, *store.Target) (instance, error) {
+		if fail {
+			return nil, errors.New("agent not up")
+		}
+		return tv, nil
+	}
+	ctx := context.Background()
+	a1, err := r.aggregateFor(ctx, "usr_op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a1.incomplete || strings.Join(a1.targets, ",") != "gh" {
+		t.Fatalf("first build: incomplete=%v targets=%v", a1.incomplete, a1.targets)
+	}
+	// Within the grace period the same aggregate is served, even though tv is up now.
+	fail = false
+	if a2, _ := r.aggregateFor(ctx, "usr_op"); a2 != a1 {
+		t.Fatal("rebuilt before the grace period")
+	}
+	// Past it, the next request rebuilds and picks tv up.
+	a1.builtAt = time.Now().Add(-2 * incompleteRetry)
+	a3, err := r.aggregateFor(ctx, "usr_op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a3 == a1 || a3.incomplete || strings.Join(a3.targets, ",") != "gh,tv" {
+		t.Fatalf("rebuild: same=%v incomplete=%v targets=%v", a3 == a1, a3.incomplete, a3.targets)
 	}
 }

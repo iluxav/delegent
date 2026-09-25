@@ -312,12 +312,21 @@ func (a *adminEnv) mint(r *http.Request, name string) (keyRow, string, error) {
 	return a.mintFor(r, name, "")
 }
 
+// mintAgent mints a key issued to a fronted A2A agent (see store.AgentKey.AgentTargetID).
+func (a *adminEnv) mintAgent(r *http.Request, name, agentTarget string) (keyRow, string, error) {
+	return a.mintKeyRow(r, name, "", agentTarget)
+}
+
 // mintFor mints a key, optionally attributing it to the OAuth client it was issued to.
 func (a *adminEnv) mintFor(r *http.Request, name, oauthClientID string) (keyRow, string, error) {
+	return a.mintKeyRow(r, name, oauthClientID, "")
+}
+
+func (a *adminEnv) mintKeyRow(r *http.Request, name, oauthClientID, agentTarget string) (keyRow, string, error) {
 	full, hash, prefix := agentkey.New()
 	k := &store.AgentKey{
 		ID: id.New("akey"), UserID: a.e.operator, Hash: hash, Prefix: prefix, Name: name,
-		OAuthClientID: oauthClientID, CreatedAt: nowMillis(),
+		OAuthClientID: oauthClientID, AgentTargetID: agentTarget, CreatedAt: nowMillis(),
 	}
 	if err := a.e.st.PutAgentKey(r.Context(), k); err != nil {
 		return keyRow{}, "", err

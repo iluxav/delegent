@@ -1,0 +1,101 @@
+{{define "runsPage"}}
+<header class="target-header">
+  <div class="target-title">
+    <span class="eyebrow">Runs</span>
+    <h2>What your agents are doing</h2>
+    <p class="text-ink-soft">Every task, from the request your client made to each agent it pulled in — who called whom, what was passed, and what you were asked to approve. Open one to watch it live.</p>
+  </div>
+</header>
+<div id="runs" hx-get="/runs" hx-trigger="every 3s" hx-swap="innerHTML" hx-select="#runs > *" hx-disinherit="*">
+{{template "runCards" .}}
+</div>
+{{end}}
+
+{{define "runCards"}}
+{{if .Runs}}
+<ul class="run-list" aria-label="Runs">
+  {{range .Runs}}
+  <li class="run-card">
+    <a class="run-card-link" href="/runs/{{.Root}}" hx-get="/runs/{{.Root}}" hx-target="#main" hx-push-url="true">
+      <div class="run-card-top"><span class="pill {{if eq .StatusTone "ok"}}bg-ok-soft text-ok{{else if eq .StatusTone "warn"}}bg-warn-soft text-warn{{else if eq .StatusTone "bad"}}bg-bad-soft text-bad{{else}}bg-panel text-ink-soft{{end}}">{{.Status}}</span><span class="text-xs text-ink-faint">{{.Started}}</span></div>
+      <div class="run-card-title">{{.Title}}</div>
+      <div class="run-chain" aria-label="Participants">{{range $i, $p := .Participants}}{{if $i}}<span class="run-chain-sep" aria-hidden="true">→</span>{{end}}<span class="run-chain-node run-kind-{{$p.Kind}}">{{$p.Name}}</span>{{end}}</div>
+      <div class="text-xs text-ink-faint">{{len .Rows}} steps · session {{.Root}}</div>
+    </a>
+  </li>
+  {{end}}
+</ul>
+{{else}}
+<div class="empty-workspace"><span class="eyebrow">Nothing yet</span><h2>No runs recorded</h2><p>As soon as a client calls a tool through the gateway, its run appears here — and every agent the call reaches after it.</p></div>
+{{end}}
+{{end}}
+
+{{define "runMissing"}}
+<div class="empty-workspace"><span class="eyebrow">Runs</span><h2>No run under {{.Root}}</h2><p>It may belong to a gateway process that has since restarted. <a class="text-button" href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true">All runs</a></p></div>
+{{end}}
+
+{{define "runPage"}}
+<header class="target-header">
+  <div class="target-title">
+    <span class="eyebrow"><a href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true">Runs</a> / {{.Root}}</span>
+    <h2>{{.Title}}</h2>
+    <p class="text-ink-soft">Started {{.Started}} by <strong>{{.Harness}}</strong>. Updates live while the run is going.</p>
+  </div>
+</header>
+<section class="run-flow" data-run-flow="/runs/{{.Root}}/state" aria-label="Live flow">
+  <div class="run-flow-bar">
+    <span class="pill bg-panel text-ink-soft" data-flow-status>{{.Status}}</span>
+    <span class="text-xs text-ink-faint" data-flow-note>connecting…</span>
+    <span class="run-flow-actions"><button class="btn" type="button" data-flow-zoom="out" title="Zoom out" aria-label="Zoom out">−</button><button class="btn" type="button" data-flow-zoom="in" title="Zoom in" aria-label="Zoom in">+</button><button class="btn" type="button" data-flow-zoom="fit" title="Fit the whole flow in view">Fit</button><button class="btn" type="button" data-flow-replay title="Play the run again from the start">Replay</button></span>
+  </div>
+  <div class="run-flow-stage" data-flow-stage><svg class="run-flow-svg" data-flow-svg role="img" aria-label="Agents and the data flowing between them"></svg><span class="run-flow-hint">drag to move · wheel to zoom</span></div>
+  <ol class="run-flow-feed" data-flow-feed aria-live="polite" aria-label="Latest activity"></ol>
+</section>
+<details class="run-sequence"><summary class="section-heading">Sequence diagram</summary>
+<div id="rundiagram" hx-get="/runs/{{.Root}}/diagram" hx-include="#rkn" hx-trigger="every 2s" hx-swap="innerHTML">
+{{template "runDiagram" .}}
+</div>
+</details>
+{{end}}
+
+{{define "runDiagram"}}
+<input type="hidden" id="rkn" name="known" value="{{.Sig}}">
+<div class="run-status"><span class="pill {{if eq .StatusTone "ok"}}bg-ok-soft text-ok{{else if eq .StatusTone "warn"}}bg-warn-soft text-warn{{else if eq .StatusTone "bad"}}bg-bad-soft text-bad{{else}}bg-panel text-ink-soft{{end}}">{{.Status}}</span>{{if eq .StatusTone "warn"}}<span class="text-xs text-ink-soft">An agent is blocked on you — the approval card is at the bottom right, or under the server's Alerts.</span>{{end}}</div>
+<div class="run-diagram-scroll" tabindex="0" role="region" aria-label="Sequence diagram">
+<svg class="run-diagram" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}" role="img" aria-label="Sequence of calls between you, the harness, and the agents">
+  <defs>
+    <marker id="run-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" fill="currentColor"/></marker>
+  </defs>
+  {{range .Participants}}
+  <line class="run-lifeline" x1="{{.X}}" y1="{{$.HeaderH}}" x2="{{.X}}" y2="{{$.Height}}"/>
+  <g class="run-participant run-kind-{{.Kind}}">
+    <rect x="{{.X}}" y="14" width="164" height="44" rx="10" transform="translate(-82 0)"/>
+    <text x="{{.X}}" y="34" text-anchor="middle" class="run-participant-name">{{.Name}}</text>
+    <text x="{{.X}}" y="50" text-anchor="middle" class="run-participant-kind">{{if eq .Kind "you"}}operator{{else if eq .Kind "harness"}}client · key{{else}}agent · target{{end}}</text>
+  </g>
+  {{end}}
+  {{range .Rows}}
+  <g class="run-row run-row-{{.Kind}} {{if .Tone}}run-tone-{{.Tone}}{{end}} {{if .Pending}}run-pending{{end}}">
+    <title>{{.Time}} · {{.Label}}{{if .Full}} · {{.Full}}{{end}}</title>
+    <line x1="{{.X1}}" y1="{{.Y}}" x2="{{.X2}}" y2="{{.Y}}" marker-end="url(#run-arrow)" {{if .Dashed}}stroke-dasharray="6 5"{{end}}>{{if .Pending}}<animate attributeName="opacity" values="1;0.35;1" dur="1.4s" repeatCount="indefinite"/>{{end}}</line>
+    <text x="{{.Mid}}" y="{{.Y}}" dy="-7" text-anchor="middle" class="run-label">{{.Label}}{{if .Pending}} · waiting{{end}}</text>
+    {{if .Text}}<text x="{{.Mid}}" y="{{.Y}}" dy="15" text-anchor="middle" class="run-text">{{.Text}}</text>{{end}}
+    <text x="{{$.Width}}" y="{{.Y}}" dx="-6" dy="4" text-anchor="end" class="run-time">{{.Time}}</text>
+  </g>
+  {{end}}
+</svg>
+</div>
+<section class="content-section">
+  <h3 class="section-heading">Timeline</h3>
+  <ol class="run-timeline">
+    {{range .Rows}}
+    <li class="run-step {{if .Tone}}run-tone-{{.Tone}}{{end}}">
+      <span class="run-step-time">{{.Time}}</span>
+      <span class="run-step-who">{{(index $.Participants .From).Name}} <span aria-hidden="true">→</span> {{(index $.Participants .To).Name}}</span>
+      <span class="run-step-label">{{.Label}}{{if .Pending}} · waiting for you{{end}}</span>
+      {{if .Full}}<pre class="run-step-body">{{.Full}}</pre>{{end}}
+    </li>
+    {{end}}
+  </ol>
+</section>
+{{end}}

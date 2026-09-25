@@ -11,9 +11,50 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"delegent.dev/gateway"
 )
+
+// hermesYAML renders a Hermes config.yaml mcp_servers entry: the transport (url, or command
+// with args ["stdio"]), optional headers, optional env. Values are double-quoted so paths and
+// keys survive YAML parsing verbatim.
+func hermesYAML(transport, headers, env map[string]string) string {
+	q := func(s string) string { return strconv.Quote(s) }
+	var b strings.Builder
+	b.WriteString("mcp_servers:\n  delegent:\n")
+	if u, ok := transport["url"]; ok {
+		b.WriteString("    url: " + q(u) + "\n")
+	}
+	if c, ok := transport["command"]; ok {
+		b.WriteString("    command: " + q(c) + "\n    args: [\"stdio\"]\n")
+	}
+	if len(headers) > 0 {
+		b.WriteString("    headers:\n")
+		for _, k := range sortedKeys(headers) {
+			b.WriteString("      " + k + ": " + q(headers[k]) + "\n")
+		}
+	}
+	if len(env) > 0 {
+		b.WriteString("    env:\n")
+		for _, k := range sortedKeys(env) {
+			b.WriteString("      " + k + ": " + q(env[k]) + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // keyPlaceholder stands in for a key the dashboard cannot know (every stored key is hashed).
 const keyPlaceholder = "dgk_…"
@@ -29,6 +70,9 @@ type keyView struct {
 	// copied into a config file. Client is the agent that registered for it.
 	ViaOAuth bool
 	Client   string
+	// Agent names the A2A target this key was issued to (the key that agent uses when it calls
+	// other targets through the gateway); empty for a person's harness.
+	Agent string
 }
 
 // channelPreset is one row of the consent-channel picker.
@@ -58,11 +102,13 @@ type snippet struct {
 }
 
 type connectView struct {
-	Presets     []channelPreset
-	Keys        []keyView
-	Snippets    []snippet
-	Minted      string // plaintext of a key just minted or rolled — shown exactly once
-	MintName    string
+	Presets  []channelPreset
+	Keys     []keyView
+	Snippets []snippet
+	Minted   string // plaintext of a key just minted or rolled — shown exactly once
+	MintName string
+	// Agents lists the registered A2A targets, so a key can be issued to one of them.
+	Agents      []string
 	Notice      string
 	Error       string
 	Placeholder bool // the snippets carry the placeholder, not a real key
@@ -196,6 +242,26 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			}}}),
 		},
 		{
+			ID: "hermes", Label: "Hermes",
+			File:    "one command, from anywhere — paste a minted key when it asks",
+			Cmd:     "hermes mcp add delegent --url " + url + " --auth header",
+			Note:    "Hermes stores the key in ~/.hermes/.env and references it from config.yaml. Use --auth oauth instead to sign in through Delegent with no key. Hermes has no consent dialog of its own, so approvals land in this dashboard's Alerts (or telegram / the CLI).",
+			JSON:    hermesYAML(map[string]string{"url": url}, map[string]string{"Authorization": "Bearer " + key}, nil),
+			AltFile: "~/.hermes/config.yaml, launching delegent locally",
+			AltNote: "The local-process form, with a minted key.",
+			AltJSON: hermesYAML(map[string]string{"command": cmd}, nil, env),
+		},
+		{
+			ID: "pi", Label: "Pi",
+			File:    "once: install the MCP adapter (Pi has no built-in MCP), then restart Pi",
+			Cmd:     "pi install npm:pi-mcp-adapter",
+			Note:    "Then save the configuration as ~/.config/mcp/mcp.json (every project) or .mcp.json in the project. The adapter adds one proxy tool that discovers Delegent's tools on demand; /mcp inside Pi lists the servers. Delegent's consent dialog appears in Pi's own prompts (the adapter supports elicitation).",
+			JSON:    mcpServers(map[string]any{"url": url, "headers": map[string]string{"Authorization": "Bearer " + key}}),
+			AltFile: "the same file, launching delegent locally",
+			AltNote: "The local-process form, with a minted key.",
+			AltJSON: mcpServers(stdio),
+		},
+		{
 			ID: "openai", Label: "ChatGPT / OpenAI",
 			File: "an MCP tool on the Responses API",
 			Note: "Remote MCP, so OpenAI's servers must reach this gateway — put it behind a public URL (a tunnel) and swap the host. It will sign in through Delegent the same way.",
@@ -241,7 +307,16 @@ func (w *webApp) connectView(r *http.Request, plaintext string) connectView {
 			ID: k.ID, Name: k.Name, Prefix: k.Prefix, Revoked: k.RevokedAt != 0, LastUsed: lastUsed(k.LastUsedAt),
 			Channels: strings.Join(k.ConsentChannels, ","), Hint: presetHint(k.ConsentChannels),
 			ViaOAuth: k.OAuthClientID != "", Client: w.clientName(k.OAuthClientID),
+			Agent: k.AgentTargetID,
 		})
+	}
+	if ts, err := w.e.st.ListTargets(r.Context()); err == nil {
+		for _, t := range ts {
+			if t.Kind == gateway.TargetKindA2A {
+				v.Agents = append(v.Agents, t.ID)
+			}
+		}
+		sort.Strings(v.Agents)
 	}
 	return v
 }
@@ -271,6 +346,19 @@ func (w *webApp) connectPane(rw http.ResponseWriter, r *http.Request) {
 
 func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
+	agent := strings.TrimSpace(r.FormValue("agent"))
+	if agent != "" {
+		// Issued to an agent: it must be a registered A2A target; the name defaults to it.
+		if t, err := w.e.st.GetTarget(r.Context(), agent); err != nil || t.Kind != gateway.TargetKindA2A {
+			v := w.connectView(r, "")
+			v.Error = fmt.Sprintf("%q is not a registered agent", agent)
+			w.render(rw, "connect", v)
+			return
+		}
+		if name == "" {
+			name = "agent:" + agent
+		}
+	}
 	if name == "" {
 		v := w.connectView(r, "")
 		v.Error = "give the key a name — events and rolls are tracked by it"
@@ -278,7 +366,7 @@ func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := &adminEnv{e: w.e, reg: w.reg}
-	row, plaintext, err := a.mint(r, name)
+	row, plaintext, err := a.mintAgent(r, name, agent)
 	if err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()

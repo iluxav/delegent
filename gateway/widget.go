@@ -37,6 +37,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"delegent.dev/gateway/broker"
 	"delegent.dev/gateway/controlplane"
 	"delegent.dev/gateway/store"
 )
@@ -171,7 +172,7 @@ func (g *Gateway) setCaps(connID string, c clientCaps) {
 func (g *Gateway) capsOf(connID string) clientCaps {
 	g.sessMu.Lock()
 	defer g.sessMu.Unlock()
-	return g.byConnCaps[connID]
+	return g.byConnCaps[baseConn(connID)]
 }
 
 // setPolicy/policyOf keep the agent key's consent-channel policy per connection (stashed at
@@ -184,7 +185,7 @@ func (g *Gateway) setPolicy(connID string, p []string) {
 func (g *Gateway) policyOf(connID string) []string {
 	g.sessMu.Lock()
 	defer g.sessMu.Unlock()
-	return g.byConnPolicy[connID]
+	return g.byConnPolicy[baseConn(connID)]
 }
 
 // setConnMeta stashes the callMeta of the guarded call that triggered a widget consent, keyed by
@@ -389,7 +390,7 @@ func (g *Gateway) handleSubmitConsent(ctx context.Context, req *mcp.CallToolRequ
 // (or a console-mode vendor call) blocked on it returns in the same turn.
 func (g *Gateway) mintPending(pc pendingConsent, answer *controlplane.ConsentAnswer) (granted bool, message string) {
 	handle := g.resumeSession(pc.ConnID)
-	nh, msg, ok := g.br.Grant(pc.Principal, handle, pc.Scopes, pc.Reason, staticConsent{answer: answer})
+	nh, msg, ok := g.br.GrantUnder(pc.Principal, handle, pc.Scopes, pc.Reason, staticConsent{answer: answer}, broker.Lineage{Parent: parentOfConn(pc.ConnID), Label: pc.Label})
 	if !ok {
 		g.emitPending(pc, store.EventPermissionDenied, nil, msg)
 		pc.resolve(consentOutcome{granted: false, message: "Denied. " + msg})
@@ -416,6 +417,9 @@ func (g *Gateway) emitPending(pc pendingConsent, typ string, scopes []string, re
 	g.emit(store.Event{
 		Type: typ, TargetID: g.targetID, UserID: pc.Principal,
 		SessionHandle: h, AgentName: g.br.AgentDisplayName(h),
+		// The decision is the operator's, but the ask was the caller's: carry its key and the
+		// parent hop it echoed, so the run view can place the decision in the right chain.
+		KeyName: pc.Key, ParentHandle: parentOfConn(pc.ConnID), ConnID: baseConn(pc.ConnID),
 		Tool: "", Scopes: scopes, Reason: reason,
 	})
 }

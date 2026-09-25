@@ -76,7 +76,9 @@
   <form hx-post="/targets" hx-target="#main" hx-indicator="#adding" hx-disabled-elt="find button[type='submit']">
     <label class="block font-medium" for="name">Server name</label><p class="text-xs text-ink-faint">Tools appear to agents as <code><span id="slug">name</span>__&lt;tool&gt;</code>.</p>
     <input class="input" id="name" name="name" value="{{.Name}}" placeholder="e.g. GitHub" required autofocus autocomplete="off">
-    <label class="mt-5 block font-medium" for="endpoint">MCP endpoint</label><p class="text-xs text-ink-faint">The server’s Streamable HTTP URL.</p>
+    <label class="mt-5 block font-medium" for="kind">What is it?</label>
+    <select class="input" id="kind" name="kind"><option value="mcp" selected>An MCP server (tools)</option><option value="a2a">An A2A agent (skills, published on an Agent Card)</option></select>
+    <label class="mt-5 block font-medium" for="endpoint">Endpoint</label><p class="text-xs text-ink-faint">An MCP server’s Streamable HTTP URL, or an agent’s base URL (its card is read from <code>/.well-known/agent-card.json</code>).</p>
     <input class="input font-mono text-xs" id="endpoint" name="endpoint" type="url" value="{{.Endpoint}}" placeholder="https://api.example.com/mcp" required spellcheck="false" autocomplete="url">
     <details><summary>Use an access token <span class="text-ink-faint">· optional</span></summary><p class="mt-3 text-xs leading-relaxed text-ink-soft">If your server supports OAuth, leave this empty and we’ll take you to its sign-in page. Only paste a token if the server provides one directly.</p><label class="mt-3 block font-medium" for="credential">Access token</label><input class="input font-mono text-xs" id="credential" name="credential" type="password" autocomplete="off"><p class="mt-2 text-xs text-ink-faint">Credentials are sealed in your gateway.</p></details>
     <div class="mt-6 flex flex-wrap items-center gap-3"><button class="btn btn-primary" type="submit">Connect and discover tools <span aria-hidden="true">→</span></button><span id="adding" class="htmx-indicator text-xs text-ink-soft" role="status">Connecting to the endpoint…</span></div>

@@ -210,7 +210,7 @@ func TestDashboardKeysAndSnippets(t *testing.T) {
 	if !strings.Contains(body, "No keys yet") || !strings.Contains(body, "dgk_…") {
 		t.Fatalf("empty connect pane:\n%s", body)
 	}
-	for _, want := range []string{"Claude Code", "Claude Desktop", "Cursor", "VS Code", "ChatGPT / OpenAI", "Any HTTP client"} {
+	for _, want := range []string{"Claude Code", "Claude Desktop", "Cursor", "VS Code", "Hermes", "Pi", "ChatGPT / OpenAI", "Any HTTP client"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("connect pane missing the %s snippet", want)
 		}

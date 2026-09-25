@@ -36,9 +36,13 @@ type Session struct {
 	Handle       string
 	Principal    string // owning principal, e.g. "root:alice"
 	ParentHandle string // the session narrowed FROM; "" at a root
-	Chain        []SlipRow
-	SealedKey    []byte // holder private key, sealed by keyring.Sealer — never plaintext
-	Pubkey       string // holder public key (hex); enough to augment/re-mint without unsealing
+	// Label is a display-only identity the minting surface attaches ("laptop@github": the
+	// agent key's name at the target). AgentDisplayName renders it in place of the handle
+	// suffix so a chain reads "laptop@researcher→agent:researcher@mailer". Never enforced.
+	Label     string
+	Chain     []SlipRow
+	SealedKey []byte // holder private key, sealed by keyring.Sealer — never plaintext
+	Pubkey    string // holder public key (hex); enough to augment/re-mint without unsealing
 
 	// projection (folded effective values) — derived, indexed, not the source of truth
 	Effects          uint
@@ -166,9 +170,16 @@ type Event struct {
 	ClientName    string
 	ClientVersion string
 	RemoteIP      string
-	Params        json.RawMessage
-	Result        json.RawMessage
-	Error         string
+	// ParentHandle is the caller's OWN session when the call arrived under one (the
+	// X-Delegent-Session it echoed): the hop this event is a child of. Empty for a root call.
+	ParentHandle string
+	// ConnID is the client's MCP connection the call came in on — one conversation in Claude
+	// Code, Pi, … Every root call a client makes in one conversation shares it, which is how
+	// the runs view keeps "research it" and the later "now email it" in one run.
+	ConnID string
+	Params json.RawMessage
+	Result json.RawMessage
+	Error  string
 }
 
 // EventFilter narrows a ListEvents query. Every field is optional — a zero value is ignored.
@@ -183,13 +194,15 @@ type EventFilter struct {
 	Decision  string
 	Since     int64 // unix ms; 0 = no lower bound
 	Until     int64 // unix ms; 0 = no upper bound
-	Limit     int   // 0 = default 200; capped at 1000
+	Limit     int   // 0 = default 200; capped at 1000; EventLimitAll = no limit (the whole log)
 }
 
-// EventLimitDefault / EventLimitMax bound a ListEvents page.
+// EventLimitDefault / EventLimitMax bound a ListEvents page. EventLimitAll asks for the whole
+// log — a view that reconstructs history (the runs page) must never lose its oldest rows.
 const (
 	EventLimitDefault = 200
 	EventLimitMax     = 1000
+	EventLimitAll     = -1
 )
 
 // --- configuration (was adapters/<vendor>/*.json + DELEGENT_* env) ---
@@ -320,6 +333,11 @@ type AgentKey struct {
 	// "console"): how a human approves requests from the harness holding this key. Empty = auto
 	// (capability order). The gateway always falls back to the web console after the list.
 	ConsentChannels []string
+	// AgentTargetID names the agent target this key was issued FOR — the key a fronted A2A agent
+	// uses when it is itself a consumer. Empty for a human's harness (Claude Code, Cursor, …).
+	// Display/advisory only: a parentless call from such a key is flagged in the consent prompt
+	// ("a registered agent, no parent task given"); it never widens or narrows authority.
+	AgentTargetID string
 }
 
 // ChannelConnection binds a user to an out-of-band approval surface (a telegram chat; later

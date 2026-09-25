@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"delegent.dev/gateway/store"
@@ -223,5 +224,20 @@ func TestJSONFileStore_FilesArePlainJSON(t *testing.T) {
 	var rec store.Receipt
 	if err := json.Unmarshal(line, &rec); err != nil || rec.ID != "rcp_1" {
 		t.Fatalf("receipt line not plain JSON: %v, %s", err, line)
+	}
+}
+
+// EventLimitAll returns the whole log, past the page cap.
+func TestListEventsAll(t *testing.T) {
+	st := store.NewMemStore()
+	for i := 0; i < store.EventLimitMax+50; i++ {
+		if err := st.AppendEvent(context.Background(), &store.Event{ID: "e" + strconv.Itoa(i), UserID: "u", Type: store.EventToolCall, CreatedAt: int64(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capped, _ := st.ListEvents(context.Background(), store.EventFilter{UserID: "u", Limit: store.EventLimitMax + 50})
+	all, _ := st.ListEvents(context.Background(), store.EventFilter{UserID: "u", Limit: store.EventLimitAll})
+	if len(capped) != store.EventLimitMax || len(all) != store.EventLimitMax+50 {
+		t.Errorf("capped=%d all=%d", len(capped), len(all))
 	}
 }

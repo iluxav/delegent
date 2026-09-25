@@ -292,10 +292,12 @@ func (m *MemStore) ListEvents(_ context.Context, f EventFilter) ([]*Event, error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	limit := f.Limit
-	if limit <= 0 {
+	switch {
+	case limit == EventLimitAll:
+		limit = len(m.events)
+	case limit <= 0:
 		limit = EventLimitDefault
-	}
-	if limit > EventLimitMax {
+	case limit > EventLimitMax:
 		limit = EventLimitMax
 	}
 	var out []*Event

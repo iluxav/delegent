@@ -59,7 +59,81 @@ func (b *Broker) Open(principal string, scopes []string, reason string, consent 
 // the original expiry, budget ledger, and holder key — so extending scope never resets the
 // clock or the remaining budget, and scopes already held need no prompt at all.
 func (b *Broker) Grant(principal, handle string, requested []string, reason string, consent controlplane.Consent) (outHandle, message string, granted bool) {
+	return b.GrantUnder(principal, handle, requested, reason, consent, Lineage{})
+}
+
+// Lineage is what a NEW session inherits from the call that opened it: the caller's own
+// session (Parent — the X-Delegent-Session an agent echoed) and a display label. With a
+// Parent the new session is a CHILD hop: its expiry is capped at the parent's, its remaining
+// delegation depth is the parent's minus one (a parent at depth 0 cannot open it at all), and
+// it is revoked with the parent's chain. The human's consent still decides its scopes — the
+// parent's scopes live on another target and never transfer.
+type Lineage struct {
+	Parent string
+	Label  string
+}
+
+// CheckLineage reports, BEFORE any human is asked, whether a new session could be opened
+// under parent at all: the parent must exist, be live, belong to principal, and have depth
+// left. Returns "" when a grant is possible, else the refusal — so a structurally impossible
+// ask fails fast instead of parking a consent request a human can only approve into a
+// refusal. GrantUnder repeats the same checks (they are cheap) so callers cannot skip them.
+func (b *Broker) CheckLineage(principal, parent string) string {
+	if parent == "" {
+		return ""
+	}
+	ps, err := b.st.GetSession(bg(), parent)
+	if err != nil {
+		return "parent session " + parent + " is unknown"
+	}
+	if !b.sessionLive(ps) {
+		return "parent session " + parent + " is no longer live (expired or revoked)"
+	}
+	if ps.Principal != principal {
+		return "parent session " + parent + " belongs to another principal"
+	}
+	pchain, err := b.rowsToChain(ps.Chain)
+	if err != nil {
+		return "parent session unreadable: " + err.Error()
+	}
+	if core.Fold(pchain, nil).Depth <= 0 {
+		return "delegation depth exhausted: " + b.AgentDisplayName(parent) + " may not hand work to another agent"
+	}
+	return ""
+}
+
+// GrantUnder is Grant with lineage for the new-session case. Augmenting an existing session
+// ignores the lineage: the session already has one.
+func (b *Broker) GrantUnder(principal, handle string, requested []string, reason string, consent controlplane.Consent, ln Lineage) (outHandle, message string, granted bool) {
 	if handle == "" {
+		depth := controlplane.RootDepth()
+		var capExp int64
+		lineage := ""
+		if ln.Parent != "" {
+			parent, err := b.st.GetSession(bg(), ln.Parent)
+			if err != nil {
+				return "", "parent session " + ln.Parent + " is unknown", false
+			}
+			if !b.sessionLive(parent) {
+				return "", "parent session " + ln.Parent + " is no longer live (expired or revoked)", false
+			}
+			if parent.Principal != principal {
+				return "", "parent session " + ln.Parent + " belongs to another principal", false
+			}
+			pchain, err := b.rowsToChain(parent.Chain)
+			if err != nil {
+				return "", "parent session unreadable: " + err.Error(), false
+			}
+			pd := core.Fold(pchain, nil).Depth
+			if pd <= 0 {
+				msg := "delegation depth exhausted: " + b.AgentDisplayName(ln.Parent) + " may not hand work to another agent"
+				b.cp.RecordDeny(principal, requested, msg)
+				return "", msg, false
+			}
+			depth = pd - 1
+			capExp = parent.ExpiresAt
+			lineage = "under " + ln.Parent
+		}
 		pub, priv, err := core.NewKeypair()
 		if err != nil {
 			return "", "keygen failed", false
@@ -68,12 +142,16 @@ func (b *Broker) Grant(principal, handle string, requested []string, reason stri
 		if len(gr) == 0 {
 			return "", deny, false
 		}
-		chain, eff, err := b.cp.MintFor(principal, pub, gr, b.now()+int64(ttl)*60_000, budget)
+		exp := b.now() + int64(ttl)*60_000
+		if capExp != 0 && capExp < exp {
+			exp = capExp
+		}
+		chain, eff, err := b.cp.MintRoot(principal, pub, gr, exp, budget, depth, lineage)
 		if err != nil {
 			return "", err.Error(), false
 		}
 		h := id.New("sess")
-		if err := b.persistNew(h, "", principal, chain, priv, pub); err != nil {
+		if err := b.persistNewLabeled(h, ln.Parent, principal, ln.Label, chain, priv, pub); err != nil {
 			return "", "persist failed: " + err.Error(), false
 		}
 		return h, "Access granted to " + b.AgentDisplayName(h) + ". effects [" + core.EffectNames(eff) + "] (" + strings.Join(gr, ", ") + ") session: " + h, true
@@ -134,6 +212,7 @@ func (b *Broker) AgentDisplayName(handle string) string {
 	}
 	// Walk leaf → root, collecting handles.
 	var lineage []string // lineage[0] is the leaf (handle itself)
+	labels := map[string]string{}
 	truncated := false
 	for cur := handle; cur != ""; {
 		if len(lineage) == maxNameDepth {
@@ -145,10 +224,15 @@ func (b *Broker) AgentDisplayName(handle string) string {
 			return handle // graceful fallback: an unresolvable link names nothing
 		}
 		lineage = append(lineage, cur)
+		labels[cur] = ss.Label
 		cur = ss.ParentHandle
 	}
 	parts := make([]string, len(lineage))
 	for i, h := range lineage {
+		if label := labels[h]; label != "" {
+			parts[len(lineage)-1-i] = label
+			continue
+		}
 		role := "sub-agent"
 		if i == len(lineage)-1 && !truncated { // the root-most link actually reached the root
 			role = "main-agent"
@@ -390,6 +474,13 @@ func (b *Broker) Escalate(handle string, scopes []string, reason string, consent
 		if err != nil {
 			break
 		}
+		// An ancestor on ANOTHER target (a cross-agent hop) holds scopes of a different vendor:
+		// a name collision ("data:read" on both) must not read as "holds it". Skip it — only
+		// same-vendor ancestors can hand down.
+		if ancChain[0].Body.Vendor != b.cp.Vendor() {
+			cur = anc.ParentHandle
+			continue
+		}
 		if subset(scopes, core.Fold(ancChain, nil).Scopes) {
 			if autoOK {
 				ch, msg, ok := b.mintFrom(cur, handle, scopes)
@@ -410,12 +501,42 @@ func (b *Broker) Escalate(handle string, scopes []string, reason string, consent
 		cur = anc.ParentHandle
 	}
 
-	// Ran out of chain — only the human at the root can grant it now.
-	_, msg, ok := b.Open(ss.Principal, scopes, reason, consent)
+	// Ran out of chain — only the human at the root can grant it now. The grant is tied to
+	// the requester's run: it expires no later than the requester's session, it can never be
+	// passed on (depth 0), and it is linked to the requester's chain (its parent, for display
+	// and chain revocation) and marked as an escalation in the receipt.
+	_, msg, ok := b.openEscalated(ss, scopes, reason, consent)
 	if ok {
 		return "No ancestor held " + strings.Join(scopes, ", ") + " — escalated to the human. " + msg, true
 	}
 	return "No ancestor held " + strings.Join(scopes, ", ") + " — escalated to the human. " + msg, false
+}
+
+// openEscalated mints the human-granted escalation for a requester: a fresh root slip on the
+// requester's principal, depth 0, expiry capped at the requester's own, parented to the
+// requester so the lineage shows and a chain revoke takes it down.
+func (b *Broker) openEscalated(req *store.Session, scopes []string, reason string, consent controlplane.Consent) (handle, message string, granted bool) {
+	pub, priv, err := core.NewKeypair()
+	if err != nil {
+		return "", "keygen failed", false
+	}
+	gr, ttl, budget, deny := b.cp.Decide(req.Principal, scopes, reason, consent)
+	if len(gr) == 0 {
+		return "", deny, false
+	}
+	exp := b.now() + int64(ttl)*60_000
+	if req.ExpiresAt != 0 && req.ExpiresAt < exp {
+		exp = req.ExpiresAt
+	}
+	chain, eff, err := b.cp.MintRoot(req.Principal, pub, gr, exp, budget, 0, "escalated from "+req.Handle)
+	if err != nil {
+		return "", err.Error(), false
+	}
+	h := id.New("sess")
+	if err := b.persistNewLabeled(h, req.Handle, req.Principal, req.Label, chain, priv, pub); err != nil {
+		return "", "persist failed: " + err.Error(), false
+	}
+	return h, "Access granted to " + b.AgentDisplayName(h) + ". effects [" + core.EffectNames(eff) + "] (" + strings.Join(gr, ", ") + ") session: " + h + " (escalated: not passable on, expires with " + req.Handle + ")", true
 }
 
 // ApproveEscalation is the ancestor's deliberate hand-down: only the session that was asked
@@ -480,9 +601,13 @@ func (b *Broker) mintFrom(ancestorHandle, requesterHandle string, scopes []strin
 	want := union(r.Scopes, scopes)
 	eff, _ := b.cp.PowerOf(want)
 
-	depth := r.Depth
+	// An escalated grant is tied to the requester's run: it can never be passed on (depth 0,
+	// so B cannot narrow what it was handed to C) and it expires no later than the requester's
+	// own session (core.Narrow clamps it to the ancestor's expiry as well).
+	depth := 0
+	exp := r.Exp
 	ceiling := r.Ceiling
-	cav := core.Caveats{Scopes: &want, Effects: &eff, Ceiling: &ceiling, Depth: &depth}
+	cav := core.Caveats{Scopes: &want, Effects: &eff, Ceiling: &ceiling, Depth: &depth, Exp: &exp}
 	childPub, childPriv, _ := core.NewKeypair()
 	childChain, _, err := core.Narrow(ancChain, cav, childPub, ancSigner, b.rand())
 	if err != nil {
@@ -501,13 +626,18 @@ func (b *Broker) mintFrom(ancestorHandle, requesterHandle string, scopes []strin
 // persistNew writes a brand-new session: chain as canonical rows, holder key sealed, budget
 // ledger initialised from the slip's budget. Used by open, narrow, and hand-down mints.
 func (b *Broker) persistNew(handle, parent, principal string, chain core.Chain, priv ed25519.PrivateKey, pub string) error {
+	return b.persistNewLabeled(handle, parent, principal, "", chain, priv, pub)
+}
+
+// persistNewLabeled is persistNew with a display label (see store.Session.Label).
+func (b *Broker) persistNewLabeled(handle, parent, principal, label string, chain core.Chain, priv ed25519.PrivateKey, pub string) error {
 	sealed, err := b.sealer.Seal(priv)
 	if err != nil {
 		return err
 	}
 	f := core.Fold(chain, nil)
 	ss := &store.Session{
-		Handle: handle, Principal: principal, ParentHandle: parent,
+		Handle: handle, Principal: principal, ParentHandle: parent, Label: label,
 		Chain: b.chainToRows(chain), SealedKey: sealed, Pubkey: pub,
 		Effects: uint(f.Effects), Scopes: f.Scopes, Ceiling: f.Ceiling,
 		ExpiresAt: f.Exp, CreatedAt: b.now(),

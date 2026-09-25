@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"strings"
 
+	"delegent.dev/gateway"
+	"delegent.dev/gateway/a2a"
+	"delegent.dev/gateway/agentkey"
+	"delegent.dev/gateway/id"
 	"delegent.dev/gateway/introspect"
 	"delegent.dev/gateway/provision"
 	"delegent.dev/gateway/secretstore"
@@ -38,18 +42,26 @@ func cmdTarget(args []string) error {
 func targetAdd(args []string) error {
 	fs := flag.NewFlagSet("target add", flag.ExitOnError)
 	home := homeFlag(fs)
-	id := fs.String("id", "", "target id (lowercase slug; required)")
+	targetID := fs.String("id", "", "target id (lowercase slug; required)")
 	name := fs.String("name", "", "display name (default: the id)")
-	endpoint := fs.String("endpoint", "", "upstream MCP endpoint URL (required)")
+	endpoint := fs.String("endpoint", "", "upstream MCP endpoint URL, or an A2A agent's base URL / agent card URL (required)")
 	credential := fs.String("credential", "", "upstream bearer credential; sealed at rest (optional)")
+	kind := fs.String("kind", "mcp", "what the endpoint speaks: mcp (a tool server) or a2a (an agent publishing an Agent Card)")
+	mintKey := fs.Bool("mint-key", false, "a2a only: also mint the agent key this agent uses when it calls OTHER targets through delegent (printed once)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *id == "" || *endpoint == "" {
+	if *targetID == "" || *endpoint == "" {
 		return errors.New("--id and --endpoint are required")
 	}
+	if *kind != "mcp" && *kind != gateway.TargetKindA2A {
+		return fmt.Errorf("--kind must be mcp or a2a, not %q", *kind)
+	}
+	if *mintKey && *kind != gateway.TargetKindA2A {
+		return errors.New("--mint-key applies to --kind a2a targets only")
+	}
 	if *name == "" {
-		*name = *id
+		*name = *targetID
 	}
 	ctx := context.Background()
 	e, err := requireOperator(ctx, *home)
@@ -57,18 +69,42 @@ func targetAdd(args []string) error {
 		return err
 	}
 
-	fmt.Printf("introspecting %s …\n", *endpoint)
-	res, err := introspect.Introspect(ctx, *endpoint, *credential)
-	if err != nil {
-		return fmt.Errorf("introspection failed (is the endpoint reachable and the credential valid?): %w", err)
+	var res *introspect.Result
+	if *kind == gateway.TargetKindA2A {
+		fmt.Printf("fetching agent card from %s …\n", *endpoint)
+		var card *a2a.Card
+		res, card, err = a2a.Introspect(ctx, *endpoint, *credential)
+		if err != nil {
+			return fmt.Errorf("could not read the agent card (is the agent up, and does it publish %s?): %w", a2a.WellKnownPath, err)
+		}
+		fmt.Printf("agent %q (%s): %d skill(s), JSON-RPC at %s\n", card.Name, card.Version, len(card.Skills), card.URL)
+		if ck := card.CredentialKind(); ck != "" && *credential == "" {
+			fmt.Printf("⚠️  the card declares %s auth but no --credential was given; calls may be rejected\n", ck)
+		}
+	} else {
+		fmt.Printf("introspecting %s …\n", *endpoint)
+		res, err = introspect.Introspect(ctx, *endpoint, *credential)
+		if err != nil {
+			return fmt.Errorf("introspection failed (is the endpoint reachable and the credential valid?): %w", err)
+		}
 	}
 
 	out, err := provision.CreateTarget(ctx, e.st, secretstore.NewDB(e.st, e.sealer), provision.CreateTargetInput{
-		ID: *id, Name: *name, Kind: "mcp", Endpoint: *endpoint,
+		ID: *targetID, Name: *name, Kind: *kind, Endpoint: *endpoint,
 		Credential: *credential, Owner: e.operator, Tools: provision.FromDraft(res.Tools),
 	})
 	if err != nil {
 		return err
+	}
+	if *mintKey {
+		full, hash, prefix := agentkey.New()
+		if err := e.st.PutAgentKey(ctx, &store.AgentKey{
+			ID: id.New("akey"), UserID: e.operator, Hash: hash, Prefix: prefix, Name: "agent:" + out.ID,
+			AgentTargetID: out.ID, CreatedAt: nowMillis(),
+		}); err != nil {
+			return err
+		}
+		fmt.Printf("agent key \"agent:%s\" minted for the agent's OWN calls through delegent — shown ONCE, hand it to the agent now:\n\n  %s\n\n", out.ID, full)
 	}
 
 	unknown := 0
@@ -109,6 +145,10 @@ func targetList(args []string) error {
 		if !t.Enabled {
 			state = "DISABLED"
 		}
+		kind := t.Kind
+		if kind == "" {
+			kind = "mcp"
+		}
 		cred := "no credential"
 		if t.CredentialRef != "" {
 			cred = "sealed credential"
@@ -116,7 +156,7 @@ func targetList(args []string) error {
 				cred = "oauth2 credential"
 			}
 		}
-		fmt.Printf("%-16s %-8s %-18s %s\n", t.ID, state, cred, t.Endpoint)
+		fmt.Printf("%-16s %-4s %-8s %-18s %s\n", t.ID, kind, state, cred, t.Endpoint)
 	}
 	return nil
 }

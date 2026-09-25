@@ -261,3 +261,53 @@ func containsAny(s string, subs ...string) bool {
 	}
 	return false
 }
+
+// DraftSkill drafts a classification for an agent skill (A2A) the same way draft does for a
+// tool: name verbs lead, then the skill's tags (a tag literally naming an effect — "read",
+// "write", "destructive", "spends", "external" — is taken as the agent's own hint, advisory
+// like an MCP annotation), then the description's verbs. Anything still unplaceable lands as
+// unknown and is refused until the operator classifies it — an agent skill takes free text,
+// so the operator's sign-off matters more here, not less.
+func DraftSkill(id, name, description string, tags []string) DraftTool {
+	lname := strings.ToLower(id + " " + name)
+	effect := effectFor(lname, nil)
+	var hints []string
+	if effect == "unknown" {
+		for _, t := range tags {
+			if e := strings.ToLower(strings.TrimSpace(t)); e == "read" || e == "write" || e == "destructive" || e == "spends" || e == "external" {
+				effect = e
+				hints = append(hints, "agent tag: "+e)
+				break
+			}
+		}
+	}
+	if effect == "unknown" {
+		effect = effectFor(strings.ToLower(description), nil)
+		if effect != "unknown" {
+			hints = append(hints, "from description")
+		}
+	}
+	cat := category(lname)
+	if cat == "data" && len(tags) > 0 {
+		cat = category(strings.ToLower(strings.Join(tags, " ")))
+	}
+	d := DraftTool{Name: id, Description: description, Effect: effect, Hints: hints, Semantics: deriveSemantics(id, nil)}
+	switch effect {
+	case "spends":
+		d.Scope = "billing:spend"
+	case "external":
+		if cat == "mail" {
+			d.Scope = "mail:send"
+		} else {
+			d.Scope = cat + ":send"
+		}
+	case "read":
+		d.Scope = cat + ":read"
+	case "write", "destructive":
+		d.Scope = cat + ":write"
+	default:
+		d.Effect = "unknown"
+		d.Unknown = true
+	}
+	return d
+}

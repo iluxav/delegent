@@ -21,7 +21,7 @@ import (
 )
 
 // defaultLogPayloadMax caps a captured params/result JSON payload (DELEGENT_LOG_PAYLOAD_MAX).
-const defaultLogPayloadMax = 8192
+const defaultLogPayloadMax = 1 << 20 // 1 MiB: the log is the record; a capped payload is a lost one
 
 // logPayloadsFromEnv reads DELEGENT_LOG_PAYLOADS once at construction. Payload capture is ON by
 // default; "off"/"0"/"false"/"no" (any case) disables capturing tool params + results, so the
@@ -74,13 +74,36 @@ func channelPolicyFromContext(ctx context.Context) []string {
 	return nil
 }
 
+// parentFromContext reads the caller's own session handle — the X-Delegent-Session it echoed —
+// that the verifier threaded through the TokenInfo Extra. Empty when auth is off, or when the
+// call carried no header (a root call).
+func parentFromContext(ctx context.Context) string {
+	ti := auth.TokenInfoFromContext(ctx)
+	if ti == nil || ti.Extra == nil {
+		return ""
+	}
+	p, _ := ti.Extra["parent_session"].(string)
+	return p
+}
+
+// agentTargetFromContext reads the agent target the calling key was issued for ("" for a
+// human's harness key).
+func agentTargetFromContext(ctx context.Context) string {
+	ti := auth.TokenInfoFromContext(ctx)
+	if ti == nil || ti.Extra == nil {
+		return ""
+	}
+	t, _ := ti.Extra["agent_target"].(string)
+	return t
+}
+
 // eventBase returns an Event pre-filled with the identity fields common to every activity-log
 // entry on this connection: the operating user, the key prefix/name and resolved IP (from the
 // verified token), the target, and — when a session exists on connID — its handle and the
 // requesting agent's display name. connID may be "" for pre-session events (a connection with
 // no grant yet reads as "new agent connection").
 func (g *Gateway) eventBase(ctx context.Context, connID string) store.Event {
-	e := store.Event{TargetID: g.targetID, UserID: g.principalOf(ctx)}
+	e := store.Event{TargetID: g.targetID, UserID: g.principalOf(ctx), ParentHandle: parentFromContext(ctx), ConnID: baseConn(connID)}
 	e.KeyPrefix, e.KeyName, e.RemoteIP = keyIdentityFromContext(ctx)
 	if connID != "" {
 		h := g.resumeSession(connID)

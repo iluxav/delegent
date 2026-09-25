@@ -53,10 +53,20 @@ type Aggregate struct {
 	routes  map[string]aggRoute
 	targets []string // included target ids, sorted
 
+	// incomplete marks an aggregate that skipped a target whose gateway failed to build (an
+	// agent not up yet, a vendor down). builtAt lets aggregateFor retry such a build after a
+	// grace period instead of serving the shrunken tool list until the next config change.
+	incomplete bool
+	builtAt    time.Time
+
 	mu         sync.Mutex
 	byConnCaps map[string]clientCaps
 	lastTarget map[string]string // connID → target of the last routed call (entry-tool inference)
 }
+
+// incompleteRetry is how long a shrunken aggregate is served before its missing targets are
+// tried again on the next request.
+const incompleteRetry = 30 * time.Second
 
 // aggregateInstructions is the server-level guidance injected into the agent's context at
 // initialize time. It frames what Delegent IS, steers agents to the gateway's own tools
@@ -142,7 +152,8 @@ func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, 
 		}
 		inst, err := r.get(ctx, t.ID)
 		if err != nil {
-			log.Printf("[delegent] aggregate for %s: target %q unavailable (%v) — skipped", userID, t.ID, err)
+			log.Printf("[delegent] aggregate for %s: target %q unavailable (%v) — skipped; retried in %s", userID, t.ID, err, incompleteRetry)
+			a.incomplete = true
 			continue
 		}
 		g, ok := inst.(*Gateway)
@@ -166,6 +177,7 @@ func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, 
 	}
 
 	a.addEntryTools(s)
+	a.builtAt = time.Now()
 	a.server = s
 	a.handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil)
 	log.Printf("[delegent] aggregate for %s up: %d targets, %d tools", userID, len(a.targets), len(a.routes))
@@ -450,13 +462,7 @@ func makeUserVerifier(st store.Store) auth.TokenVerifier {
 		return &auth.TokenInfo{
 			UserID:     k.UserID,
 			Expiration: time.Now().AddDate(100, 0, 0), // agent keys don't expire; they're revoked
-			Extra: map[string]any{
-				"user":             k.UserID,
-				"key_prefix":       k.Prefix,
-				"key_name":         k.Name,
-				"remote_ip":        remoteIP(r),
-				"consent_channels": k.ConsentChannels,
-			},
+			Extra:      tokenExtra(k, r),
 		}, nil
 	}
 }
@@ -518,8 +524,14 @@ func (r *Registry) aggregateFor(ctx context.Context, userID string) (*Aggregate,
 	}
 	r.mu.Lock()
 	if a, ok := r.aggregates[userID]; ok {
-		r.mu.Unlock()
-		return a, nil
+		// A build that skipped a target is retried once its grace period is over — a target
+		// that was merely not up yet must not stay missing until the next config change.
+		if !a.incomplete || time.Since(a.builtAt) < incompleteRetry {
+			r.mu.Unlock()
+			return a, nil
+		}
+		delete(r.aggregates, userID)
+		log.Printf("[delegent] aggregate for %s was missing targets — rebuilding", userID)
 	}
 	r.mu.Unlock()
 	a, err := newAggregate(ctx, r, userID)

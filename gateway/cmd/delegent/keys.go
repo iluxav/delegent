@@ -31,9 +31,13 @@ func cmdKey(args []string) error {
 func keyMint(args []string) error {
 	fs := flag.NewFlagSet("key mint", flag.ExitOnError)
 	home := homeFlag(fs)
-	name := fs.String("name", "", "key name — the durable label events aggregate by (required)")
+	name := fs.String("name", "", "key name — the durable label events aggregate by (required unless --agent)")
+	agent := fs.String("agent", "", "issue the key to a fronted A2A agent (target id): the key it uses when it calls other targets through delegent")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *name == "" && *agent != "" {
+		*name = "agent:" + *agent
 	}
 	if *name == "" {
 		return errors.New("--name is required")
@@ -44,9 +48,18 @@ func keyMint(args []string) error {
 		return err
 	}
 
+	if *agent != "" {
+		t, err := e.st.GetTarget(ctx, *agent)
+		if err != nil {
+			return fmt.Errorf("--agent: no target %q", *agent)
+		}
+		if t.Kind != "a2a" {
+			return fmt.Errorf("--agent: target %q is an MCP server, not an agent", *agent)
+		}
+	}
 	full, hash, prefix := agentkey.New()
 	if err := e.st.PutAgentKey(ctx, &store.AgentKey{
-		ID: id.New("akey"), UserID: e.operator, Hash: hash, Prefix: prefix, Name: *name, CreatedAt: nowMillis(),
+		ID: id.New("akey"), UserID: e.operator, Hash: hash, Prefix: prefix, Name: *name, AgentTargetID: *agent, CreatedAt: nowMillis(),
 	}); err != nil {
 		return err
 	}

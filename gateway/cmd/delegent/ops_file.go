@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"delegent.dev/gateway"
+	"delegent.dev/gateway/a2a"
 	"delegent.dev/gateway/agentkey"
 	"delegent.dev/gateway/id"
 	"delegent.dev/gateway/introspect"
@@ -103,6 +104,10 @@ func (f *fileOps) Introspect(ctx context.Context, targetID string) (*introspect.
 				cred = ts.AccessToken
 			}
 		}
+	}
+	if t.Kind == gateway.TargetKindA2A {
+		res, _, err := a2a.Introspect(ctx, t.Endpoint, cred)
+		return res, err
 	}
 	return introspect.Introspect(ctx, t.Endpoint, cred)
 }

@@ -19,7 +19,7 @@
     <div class="client-pane {{if ne $i 0}}hidden{{end}}" data-client="{{$s.ID}}" id="client-{{$s.ID}}" role="tabpanel" aria-labelledby="client-tab-{{$s.ID}}" tabindex="0">
       {{if $s.Cmd}}
       <div class="config-block">
-        <div class="config-heading"><span>{{if eq $s.ID "claude-code"}}Run in your terminal{{else}}{{$s.File}}{{end}}</span><button class="btn snippet-copy" type="button" data-copy="#cmd-{{$s.ID}}" aria-label="Copy {{$s.Label}} {{if eq $s.ID "claude-code"}}command{{else}}URL{{end}}">Copy</button></div>
+        <div class="config-heading"><span>{{if eq $s.ID "claude-desktop"}}{{$s.File}}{{else}}Run in your terminal{{end}}</span><button class="btn snippet-copy" type="button" data-copy="#cmd-{{$s.ID}}" aria-label="Copy {{$s.Label}} {{if eq $s.ID "claude-desktop"}}URL{{else}}command{{end}}">Copy</button></div>
         <pre class="snippet" id="cmd-{{$s.ID}}">{{$s.Cmd}}</pre>
       </div>
       <p class="config-alternative">Or add the configuration manually</p>
@@ -51,7 +51,10 @@
     <p class="connection-help">For clients that use a key instead of browser sign-in. Create a separate key for each agent or device.</p>
     <form hx-post="/keys" hx-target="#connect" hx-disabled-elt="find button" class="key-create-form">
       <label for="agent-key-name">Key name</label>
-      <div class="key-create-row"><input class="input" id="agent-key-name" name="name" placeholder="e.g. work laptop" autocomplete="off" required><button class="btn btn-primary" type="submit">Create key</button></div>
+      <div class="key-create-row"><input class="input" id="agent-key-name" name="name" placeholder="e.g. work laptop" autocomplete="off"><button class="btn btn-primary" type="submit">Create key</button></div>
+      {{if .Agents}}<label class="mt-3 block" for="agent-key-agent">Issued to an agent <span class="text-ink-faint">· optional</span></label>
+      <p class="connection-help">The key one of your A2A agents uses when it calls other servers through the gateway. Its calls are flagged as that agent's, and linked to the task it echoes in <code>X-Delegent-Session</code>.</p>
+      <select class="input" id="agent-key-agent" name="agent"><option value="">— a person’s client —</option>{{range .Agents}}<option value="{{.}}">{{.}}</option>{{end}}</select>{{end}}
     </form>
     {{if .Minted}}
     <div class="minted-key" role="status">
@@ -66,7 +69,7 @@
       {{range .Keys}}{{if not .ViaOAuth}}{{$hasKeys = true}}
       <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
         <div class="key-card-heading"><h5>{{.Name}}</h5><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Revoked{{else}}Active{{end}}</span></div>
-        <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span></div>
+        <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span>{{if .Agent}}<span class="pill bg-panel text-ink-soft">agent · {{.Agent}}</span>{{end}}</div>
         {{if .Revoked}}<p class="connection-help">This key can no longer connect to the gateway.</p>{{else}}
         <details class="connection-disclosure key-settings" data-panel-disclosure="settings-{{.ID}}">
           <summary>Approval settings</summary>

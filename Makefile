@@ -4,6 +4,8 @@
 #   make install            build, then copy both into BINDIR (default /usr/local/bin)
 #   make uninstall          remove them from BINDIR
 #   make inspector          build inspector/mcp-inspector (the MCP inspector web app)
+#   make agents             build the demo agents, the shell harness, and the web MCP server (agents/)
+#   make demo               stand up the agents-as-targets walkthrough (agents/demo.sh)
 #   make install-inspector  build it, then copy it into BINDIR
 #   make css                recompile the inspector's and the dashboard's Tailwind sheets (downloads the CLI once)
 #   make init               go run 'delegent init' (first run: ~/.delegent, master key, config)
@@ -40,7 +42,7 @@ PROTOCOL_BIN  := protocol/delegent-proto
 INSPECTOR_BIN := inspector/mcp-inspector
 BINS          := $(GATEWAY_BIN) $(PROTOCOL_BIN)
 
-.PHONY: all build build-gateway build-protocol install uninstall inspector install-inspector init dashboard serve css test clean
+.PHONY: all build build-gateway build-protocol install uninstall inspector install-inspector agents demo init dashboard serve css test clean
 
 # install-bins copies the given binaries into BINDIR, escalating only when it has to.
 define install-bins
@@ -90,6 +92,12 @@ inspector:
 install-inspector: inspector
 	$(call install-bins,$(INSPECTOR_BIN))
 
+agents:
+	cd agents && go build $(GOFLAGS) -o demo-agent ./cmd/demo-agent && go build $(GOFLAGS) -o demo-call ./cmd/demo-call && go build $(GOFLAGS) -o web-mcp ./cmd/web-mcp
+
+demo:
+	agents/demo.sh
+
 # Run straight from source (no install). Templates and CSS are embedded at compile time, so
 # a template or `make css` change shows up on the next run.
 init:
@@ -118,6 +126,7 @@ test:
 	cd protocol  && go vet ./... && go test ./...
 	cd gateway   && go vet ./... && go test ./...
 	cd inspector && go vet ./... && go test ./...
+	cd agents    && go vet ./... && go test ./...
 
 clean:
-	rm -f $(BINS) $(INSPECTOR_BIN)
+	rm -f $(BINS) $(INSPECTOR_BIN) agents/demo-agent agents/demo-call agents/web-mcp

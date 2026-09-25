@@ -67,6 +67,42 @@ This is a **single-operator** deployment: one human (or ops team) owns the insta
 keys, and receives every consent ask. Multi-operator routing, dashboards, and hosted
 approval channels are the hosted product.
 
+## Agents as targets (A2A)
+
+An agent that publishes an [A2A Agent Card](https://a2a-protocol.org) is fronted exactly like
+an MCP server: its skills become tools (`researcher__research_topic`), each call carries the
+consent, policy, and receipts every tool call gets, and the agent's inbound secret lives only
+in delegent.
+
+```sh
+delegent target add --kind a2a --id researcher --endpoint http://agents.internal:7103 \
+    --credential <the agent's bearer> --mint-key
+```
+
+`--mint-key` also mints the key the agent uses when it is *itself* a consumer — when it calls
+other targets through delegent. Point the agent's outbound calls at `http://host:8090/mcp`
+with that key, and have it **echo the `X-Delegent-Session` header it was called with** on
+every call it makes for that request (a request-scoped variable, where trace ids already
+live). That one header is the whole integration:
+
+- **With the header** the agent's grants are keyed per task: every call it makes is a child
+  hop of the session that called it. The consent prompt shows the chain
+  (`agent:researcher@mailer (working under claude-code@researcher) wants to send an email`),
+  the child expires no later than its parent, revoking the parent's chain takes it down, and
+  each hop spends one unit of delegation depth (`DELEGENT_MAX_DEPTH`, default 2) — a call
+  past the limit is refused before anyone is asked.
+- **Without it** the call is parentless: the agent's own key policy applies, the prompt says
+  `registered agent 'researcher' — no parent task given`, and the human decides.
+
+A skill takes free text, so per-skill policy is coarser than per-tool policy: the drafted
+effect comes from the skill's name and tags, and the operator signs it like any tool. Long
+tasks are polled, with state changes reaching the calling client as MCP progress; a task
+still running after `DELEGENT_A2A_WAIT` (default 25s, under most clients' tool-call timeouts)
+is handed back with its id for `get_task`, and a client that re-sends the same request is
+attached to the running task rather than starting a second one. A task the agent parks on
+`input-required` likewise comes back with a `get_task` handle to resume it.
+`agents/demo.sh` in the repository stands up a four-agent walkthrough.
+
 ## Dashboard
 
 ```sh
@@ -84,6 +120,11 @@ A terminal dashboard over everything above — four tabs:
   revoked; plaintext shown exactly once), and `c` sets the key's consent-channel policy
   (auto / console only / in-chat first / widget first — same presets as the hosted console).
 - **Audit** — the activity log, filterable, with live tail.
+- **Runs** (web dashboard, top bar) — one task at a time, live. The flow view draws you,
+  the client, and every agent it reached as boxes, and animates each request and reply as a
+  packet along the edge between them, with the message it carried; a box glows while its
+  agent works and pulses amber while it waits on you. Replay plays a finished run again. A
+  sequence diagram with the full payloads sits underneath.
 - **Alerts** — pending consent asks as they happen (badge + terminal bell from any tab):
   approve with a per-scope picker + TTL/budget, or deny.
 
@@ -129,6 +170,8 @@ Everything lives under `~/.delegent` (override: `--home` / `DELEGENT_HOME`):
 Receipts verify offline with the `delegent-proto` CLI from the protocol library — no gateway, no trust
 in this binary required. Tools introspection drafts a classification per tool; anything it
 can't classify is **refused until you classify it** in `adapters.json` (fail closed).
+
+`DELEGENT_MAX_DEPTH` sets how many hops a human's grant may be handed down (default 2).
 
 Config edits (targets, keys) are read at startup: restart `serve` — or let your MCP client
 relaunch the stdio process — to apply them. Runtime approvals need no restart.

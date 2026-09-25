@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"delegent.dev/gateway"
+	"delegent.dev/gateway/a2a"
 	"delegent.dev/gateway/introspect"
 	"delegent.dev/gateway/oauth"
 	"delegent.dev/gateway/provision"
@@ -337,6 +338,10 @@ func probeUpstream(ctx context.Context, e *env, t *store.Target) (*introspect.Re
 			}
 		}
 	}
+	if t.Kind == gateway.TargetKindA2A {
+		res, _, err := a2a.Introspect(ctx, t.Endpoint, cred)
+		return res, err
+	}
 	return introspect.Introspect(ctx, t.Endpoint, cred)
 }
 
@@ -370,6 +375,10 @@ func (w *webApp) createTarget(rw http.ResponseWriter, r *http.Request) {
 		Endpoint: strings.TrimSpace(r.FormValue("endpoint")),
 	}
 	cred := strings.TrimSpace(r.FormValue("credential"))
+	kind := strings.TrimSpace(r.FormValue("kind"))
+	if kind == "" {
+		kind = "mcp"
+	}
 	if f.Name == "" || f.Endpoint == "" {
 		w.addFailed(rw, r, f, "a name and an endpoint are required")
 		return
@@ -382,6 +391,32 @@ func (w *webApp) createTarget(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := w.e.st.GetTarget(ctx, slug); err == nil {
 		w.addFailed(rw, r, f, fmt.Sprintf("a server called %q (id %s) already exists — pick another name", f.Name, slug))
+		return
+	}
+
+	// An agent: read its card, draft its skills, no OAuth discovery (the card declares auth).
+	if kind == gateway.TargetKindA2A {
+		res, card, err := a2a.Introspect(ctx, f.Endpoint, cred)
+		if err != nil {
+			w.addFailed(rw, r, f, "could not read the agent card (is the agent up, and does it publish "+a2a.WellKnownPath+"?): "+err.Error())
+			return
+		}
+		out, err := provision.CreateTarget(ctx, w.e.st, secretstore.NewDB(w.e.st, w.e.sealer), provision.CreateTargetInput{
+			ID: slug, Name: f.Name, Kind: kind, Endpoint: f.Endpoint, Credential: cred,
+			Owner: w.e.operator, Tools: provision.FromDraft(res.Tools),
+		})
+		if err != nil {
+			w.addFailed(rw, r, f, err.Error())
+			return
+		}
+		log.Printf("[delegent] dashboard: added agent %q (%s): %d skill(s)", card.Name, out.ID, len(card.Skills))
+		w.reg.Invalidate(out.ID)
+		if r.Header.Get("HX-Request") != "" {
+			rw.Header().Set("HX-Redirect", "/targets/"+out.ID)
+			rw.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Redirect(rw, r, "/targets/"+out.ID, http.StatusSeeOther)
 		return
 	}
 
@@ -411,7 +446,11 @@ func (w *webApp) createTarget(rw http.ResponseWriter, r *http.Request) {
 
 	res, err := introspect.Introspect(ctx, f.Endpoint, cred)
 	if err != nil {
-		w.addFailed(rw, r, f, "could not introspect the endpoint (is it reachable, and is the credential valid?): "+err.Error())
+		msg := "could not introspect the endpoint (is it reachable, and is the credential valid?): " + err.Error()
+		if cred == "" && strings.Contains(err.Error(), "Unauthorized") {
+			msg = "the server wants a token and none was given — expand “Use an access token” below and paste it, then try again"
+		}
+		w.addFailed(rw, r, f, msg)
 		return
 	}
 	out, err := provision.CreateTarget(ctx, w.e.st, secretstore.NewDB(w.e.st, w.e.sealer), provision.CreateTargetInput{

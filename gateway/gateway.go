@@ -28,6 +28,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"delegent.dev/gateway/a2a"
 	"delegent.dev/gateway/agentkey"
 	"delegent.dev/gateway/broker"
 	"delegent.dev/gateway/controlplane"
@@ -49,7 +50,7 @@ type Gateway struct {
 	cp       *controlplane.ControlPlane
 	br       *broker.Broker
 	st       store.Store // persistence for durable console consent requests (nil in unit tests)
-	upstream *mcp.ClientSession
+	upstream Upstream
 	server   *mcp.Server
 	handler  http.Handler
 
@@ -124,7 +125,7 @@ type Gateway struct {
 	curatedSem map[string]introspect.ToolSemantics
 
 	// logPayloads (DELEGENT_LOG_PAYLOADS, default ON) captures tool params + results on the
-	// activity-log events. payloadMax (DELEGENT_LOG_PAYLOAD_MAX, default 8192) caps each captured
+	// activity-log events. payloadMax (DELEGENT_LOG_PAYLOAD_MAX, default 1 MiB) caps each captured
 	// JSON payload — anything longer is replaced with a {"_truncated":N} marker. Both are read
 	// ONCE at construction.
 	logPayloads bool
@@ -240,13 +241,34 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 		}
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "delegent", Version: "0.2.0"}, nil)
-	g.upstream, err = client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: target.Endpoint, HTTPClient: httpClient}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("connect upstream %s: %w", target.Endpoint, err)
+	switch target.Kind {
+	case TargetKindA2A:
+		// An agent target: the card is the interface, its skills are the tools, and the
+		// credential rides as a Bearer on every JSON-RPC call (plus the caller's session, so
+		// the agent can hand it back — see a2a.SessionHeader).
+		cred := ""
+		if target.CredentialRef != "" {
+			if v, err := secretstore.NewDB(st, sealer).Get(ctx, target.CredentialRef); err == nil {
+				cred = v
+			} else {
+				log.Printf("⚠️ could not resolve credential %q: %v — connecting to the agent WITHOUT it", target.CredentialRef, err)
+			}
+		}
+		up, err := newA2AUpstream(ctx, target.Endpoint, cred)
+		if err != nil {
+			return nil, fmt.Errorf("connect agent %s: %w", target.Endpoint, err)
+		}
+		g.upstream = up
+	default:
+		client := mcp.NewClient(&mcp.Implementation{Name: "delegent", Version: "0.2.0"}, nil)
+		sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: target.Endpoint, HTTPClient: httpClient}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("connect upstream %s: %w", target.Endpoint, err)
+		}
+		g.upstream = &mcpUpstream{sess: sess}
 	}
 
-	vendorTools, err := g.upstream.ListTools(ctx, nil)
+	vendorTools, err := g.upstream.Tools(ctx)
 	if err != nil {
 		g.upstream.Close()
 		return nil, fmt.Errorf("list upstream tools: %w", err)
@@ -254,7 +276,7 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 
 	// Invert the classifier: for each vendor tool, the scopes it needs → which tools each scope
 	// unlocks. Built once so plan_access can show the agent the tools behind every capability.
-	g.scopeTools = buildScopeTools(g.adapter, toolNames(vendorTools.Tools))
+	g.scopeTools = buildScopeTools(g.adapter, toolNames(vendorTools))
 
 	// Declare the MCP Apps extension in our capabilities. Rendering is gated by the CLIENT's
 	// declaration (checked per session below), but advertising ours is spec-clean and free.
@@ -326,15 +348,20 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 			g.emit(ev)
 		},
 	})
-	names := make([]string, 0, len(vendorTools.Tools))
-	g.toolDesc = make(map[string]string, len(vendorTools.Tools))
-	g.toolSem = make(map[string]introspect.ToolSemantics, len(vendorTools.Tools))
-	for _, vt := range vendorTools.Tools {
+	names := make([]string, 0, len(vendorTools))
+	g.toolDesc = make(map[string]string, len(vendorTools))
+	g.toolSem = make(map[string]introspect.ToolSemantics, len(vendorTools))
+	for _, vt := range vendorTools {
 		tool := &mcp.Tool{Name: vt.Name, Description: vt.Description, InputSchema: withIntentField(vt.InputSchema)}
 		s.AddTool(tool, g.vendorTool(vt.Name))
 		g.vendorToolInfos = append(g.vendorToolInfos, tool)
 		names = append(names, vt.Name)
 		g.toolDesc[vt.Name] = vt.Description
+		if h, ok := g.upstream.(headliner); ok {
+			if short := h.Headline(vt.Name); short != "" {
+				g.toolDesc[vt.Name] = short
+			}
+		}
 		// Curated (operator-stored) semantics win; live-annotation auto-derivation is the fallback
 		// for any tool without a stored override. Display-only either way — never gates authority.
 		if s, ok := g.curatedSem[vt.Name]; ok {
@@ -406,7 +433,11 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 	case *store.JSONFileStore:
 		storeKind = "json-file"
 	}
-	log.Printf("[delegent] target %q → upstream %s | store: %s | tools: %s", target.ID, target.Endpoint, storeKind, strings.Join(names, ", "))
+	kind := "mcp"
+	if target.Kind == TargetKindA2A {
+		kind = "a2a agent"
+	}
+	log.Printf("[delegent] target %q → %s %s | store: %s | tools: %s", target.ID, kind, target.Endpoint, storeKind, strings.Join(names, ", "))
 	if on := g.flags.active(); len(on) > 0 {
 		log.Printf("⚙️  [delegent] feature flags ON for %q: %s — a capable client will fall through to the next consent channel", target.ID, strings.Join(on, ", "))
 	}
@@ -449,6 +480,80 @@ func (g *Gateway) principalOf(ctx context.Context) string {
 		return ti.UserID
 	}
 	return g.defaultPrincipal
+}
+
+// connKey is the key a connection's session lives under. A plain connection is keyed by its
+// MCP session id. A call that arrived under a parent session (an agent echoing the
+// X-Delegent-Session it was called with) is keyed by connection AND parent — one agent
+// process serving several tasks at once holds one Delegent session per task, so grants never
+// leak across the jobs it is working. baseConn/parentOfConn split the key back apart.
+func (g *Gateway) connKey(ctx context.Context, connID string) string {
+	if p := parentFromContext(ctx); p != "" {
+		return connID + connKeySep + p
+	}
+	return connID
+}
+
+const connKeySep = "#parent="
+
+func baseConn(key string) string {
+	if i := strings.Index(key, connKeySep); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+func parentOfConn(key string) string {
+	if i := strings.Index(key, connKeySep); i >= 0 {
+		return key[i+len(connKeySep):]
+	}
+	return ""
+}
+
+// callerName is WHO is asking, for the consent headline, plus the label the granted session
+// will carry. A connection that already holds a session is named by its chain. A new one is
+// named by its key at this target, with its parent hop when it echoed one — and flagged when
+// it is a registered agent's key that echoed none (it is probably working for someone and did
+// not say who).
+func (g *Gateway) callerName(ctx context.Context, handle string) (name, label string) {
+	_, keyName, _ := keyIdentityFromContext(ctx)
+	label = keyName
+	if label == "" {
+		label = "agent"
+	}
+	label += "@" + g.targetID
+	if handle != "" {
+		return g.br.AgentDisplayName(handle), label
+	}
+	parent := parentFromContext(ctx)
+	agentTarget := agentTargetFromContext(ctx)
+	switch {
+	case parent != "":
+		return label + " (working under " + g.br.AgentDisplayName(parent) + ")", label
+	case agentTarget != "":
+		return label + " (registered agent '" + agentTarget + "' — no parent task given, acting on its own)", label
+	case keyName != "":
+		return label + " (new connection)", label
+	}
+	return g.br.AgentDisplayName(""), label
+}
+
+// callerOfPending names the caller of a parked console ask: the stashed caller name when the
+// record has one, else the session bound to its connection.
+func (g *Gateway) callerOfPending(pc pendingConsent) string {
+	if h := g.resumeSession(pc.ConnID); h != "" {
+		return g.br.AgentDisplayName(h)
+	}
+	if pc.Caller != "" {
+		return pc.Caller
+	}
+	return g.br.AgentDisplayName("")
+}
+
+// lineageOf is the lineage a grant minted for this call inherits.
+func (g *Gateway) lineageOf(ctx context.Context) broker.Lineage {
+	_, label := g.callerName(ctx, "")
+	return broker.Lineage{Parent: parentFromContext(ctx), Label: label}
 }
 
 func (g *Gateway) getSession(connID string) string {
@@ -533,10 +638,13 @@ func toolResultText(res *mcp.CallToolResult) string {
 // HOW risky (Effect). It is assembled at the gate and threaded into all three consent channels so
 // the operator reads a legible sentence instead of a bare scope label.
 type callMeta struct {
-	Tool      string
-	ToolDesc  string
-	Target    string
-	Intent    string
+	Tool     string
+	ToolDesc string
+	Target   string
+	Intent   string
+	// Detail is what the call will actually carry, when the tool takes free text (an agent
+	// skill's message): shown so the human judges the request itself, not the caller's claim.
+	Detail    string
 	Effect    core.Effect
 	Semantics introspect.ToolSemantics // derived, DISPLAY-ONLY risk markers appended to the headline
 }
@@ -607,7 +715,24 @@ func consentHeadline(agent string, m callMeta) string {
 	if m.Intent != "" {
 		line += "\nWhy: \"" + m.Intent + "\""
 	}
+	if m.Detail != "" {
+		line += "\nMessage: \"" + m.Detail + "\""
+	}
 	return line
+}
+
+// detailer is optionally implemented by an Upstream whose tools carry free text worth
+// showing at consent (an agent skill's message).
+type detailer interface {
+	Detail(tool string, args map[string]any) string
+}
+
+// callDetail is the free-text excerpt the consent prompt shows for this call, if any.
+func (g *Gateway) callDetail(name string, args map[string]any) string {
+	if d, ok := g.upstream.(detailer); ok {
+		return d.Detail(name, args)
+	}
+	return ""
 }
 
 // ---- consent dialog (MCP elicitation) ----
@@ -624,7 +749,8 @@ type elicitConsent struct {
 // session handle is asking (empty handle = a connection with no session yet). meta carries the
 // call's action/target/intent/effect so the dialog leads with a legible headline, not a scope.
 func (g *Gateway) consentUI(ctx context.Context, ss *mcp.ServerSession, handle string, meta callMeta) *elicitConsent {
-	return &elicitConsent{ctx: ctx, ss: ss, agent: g.br.AgentDisplayName(handle), connScoped: g.grantScope == grantScopeConnection, meta: meta}
+	name, _ := g.callerName(ctx, handle)
+	return &elicitConsent{ctx: ctx, ss: ss, agent: name, connScoped: g.grantScope == grantScopeConnection, meta: meta}
 }
 
 func (e *elicitConsent) Ask(r controlplane.ConsentRequest) (*controlplane.ConsentAnswer, error) {
@@ -771,12 +897,12 @@ func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 		}
 		creq := core.Request{Action: "POST", Resource: "/mcp", Amount: amount, Body: body}
 		c := core.Classify(g.adapter, creq)
-		connID := req.Session.ID()
+		connID := g.connKey(ctx, req.Session.ID())
 		handle := g.resumeSession(connID)
 
 		// The legible consent context for this call — action/target/intent/effect — threaded into
 		// whichever consent channel this connection uses.
-		meta := callMeta{Tool: name, ToolDesc: g.toolDesc[name], Target: g.targetID, Intent: intent, Effect: c.Effect, Semantics: g.toolSem[name]}
+		meta := callMeta{Tool: name, ToolDesc: g.toolDesc[name], Target: g.targetID, Intent: intent, Detail: g.callDetail(name, args), Effect: c.Effect, Semantics: g.toolSem[name]}
 
 		// Activity log: the tool call as it arrived (params captured per the payloads flag). Emitted
 		// HERE, before the authorize/consent branch, so the declared intent is recorded on EVERY
@@ -794,6 +920,22 @@ func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 				errEv.Reason = "unknown tool — not classified (fail closed)"
 				g.emit(errEv)
 				return toolError("🔒 DELEGENT: '" + name + "' is not classified — denied (fail closed). No scope can grant it."), nil
+			}
+
+			// A call under a parent session that could never be granted (dead parent, no
+			// delegation depth left) is refused here, before any human is asked.
+			if handle == "" {
+				if why := g.br.CheckLineage(g.principalOf(ctx), parentFromContext(ctx)); why != "" {
+					log.Printf("🔒 %s DENIED — %s", name, why)
+					denyEv := g.eventBase(ctx, connID)
+					denyEv.Type = store.EventPermissionDenied
+					denyEv.Tool = name
+					denyEv.Scopes = c.Scopes
+					denyEv.Reason = why
+					g.emit(denyEv)
+					g.cp.RecordDeny(g.principalOf(ctx), c.Scopes, why)
+					return toolError("🔒 DELEGENT: '" + name + "' cannot be granted on this call — " + why + ". Tell the caller; do not retry."), nil
+				}
 			}
 
 			// A vendor call that needs consent: record the ask before routing to a channel.
@@ -818,7 +960,7 @@ func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 					return g.consoleConsentBlock(ctx, connID, name, c.Scopes, meta), nil
 				}
 			}
-			nh, msg, granted := g.br.Grant(g.principalOf(ctx), handle, c.Scopes, "tool: "+name, g.consentUI(ctx, req.Session, handle, meta))
+			nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), handle, c.Scopes, "tool: "+name, g.consentUI(ctx, req.Session, handle, meta), g.lineageOf(ctx))
 			if !granted {
 				log.Printf("🔒 %s DENIED — %s", name, msg)
 				denyEv := g.eventBase(ctx, connID)
@@ -855,7 +997,7 @@ func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 		}
 
 		log.Printf("✅ %s ALLOWED (%s)", name, core.EffectNames(c.Effect))
-		return g.forward(ctx, connID, name, args)
+		return g.forward(ctx, connID, handle, name, args)
 	}
 }
 
@@ -863,8 +1005,8 @@ func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 // the single choke point for the tool_response activity-log event: a real upstream transport
 // failure logs one `error` event; any answered call (even a vendor-side IsError result) logs one
 // `tool_response`, so a failure is never double-logged.
-func (g *Gateway) forward(ctx context.Context, connID, name string, args map[string]any) (*mcp.CallToolResult, error) {
-	res, err := g.upstream.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+func (g *Gateway) forward(ctx context.Context, connID, handle, name string, args map[string]any) (*mcp.CallToolResult, error) {
+	res, err := g.upstream.Call(ctx, UpstreamCall{Name: name, Args: args, Session: handle})
 	base := g.eventBase(ctx, connID)
 	base.Tool = name
 	if err != nil {
@@ -1000,7 +1142,7 @@ func (g *Gateway) openDialogNonWidgetRedirect(connID string) *mcp.CallToolResult
 
 func (g *Gateway) handleRequestAccess(ctx context.Context, req *mcp.CallToolRequest, a requestAccessArgs) (*mcp.CallToolResult, any, error) {
 	ctx = withCallProgress(ctx, req)
-	connID := req.Session.ID()
+	connID := g.connKey(ctx, req.Session.ID())
 	// DELEGENT_AUTOGRANT bypasses mode routing (elicitation path auto-answers). Otherwise:
 	// widget-capable clients are redirected to open_access_dialog (request_access has no
 	// _meta.ui and cannot render the dialog); clients with neither elicitation nor the widget
@@ -1009,6 +1151,13 @@ func (g *Gateway) handleRequestAccess(ctx context.Context, req *mcp.CallToolRequ
 		if r := g.reqAccessWidgetRedirect(connID); r != nil {
 			log.Printf("request_access — widget-mode client redirected to open_access_dialog")
 			return r, nil, nil
+		}
+	}
+	if g.resumeSession(connID) == "" {
+		if why := g.br.CheckLineage(g.principalOf(ctx), parentFromContext(ctx)); why != "" {
+			log.Printf("🔒 request_access DENIED — %s", why)
+			g.cp.RecordDeny(g.principalOf(ctx), a.Scopes, why)
+			return toolError("🔒 DELEGENT: access cannot be granted on this call — " + why + "."), nil, nil
 		}
 	}
 	// Activity log: the access ask itself (the grant/deny is logged where it is decided — the
@@ -1029,7 +1178,7 @@ func (g *Gateway) handleRequestAccess(ctx context.Context, req *mcp.CallToolRequ
 		}
 	}
 	h := g.resumeSession(connID)
-	nh, msg, granted := g.br.Grant(g.principalOf(ctx), h, a.Scopes, a.Reason, g.consentUI(ctx, req.Session, h, callMeta{Target: g.targetID, Intent: a.Reason}))
+	nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), h, a.Scopes, a.Reason, g.consentUI(ctx, req.Session, h, callMeta{Target: g.targetID, Intent: a.Reason}), g.lineageOf(ctx))
 	if granted && h == "" {
 		g.setSession(connID, nh)
 		log.Printf("[delegent] session %s (%s) minted for connection %s", nh, g.br.AgentDisplayName(nh), connID)
@@ -1098,7 +1247,7 @@ type planAccessResult struct {
 // with its risk and the tools it unlocks, so the agent can batch-request via request_access and
 // take ONE approval instead of one prompt per tool. It grants nothing and asks no human.
 func (g *Gateway) handlePlanAccess(ctx context.Context, req *mcp.CallToolRequest, _ planAccessArgs) (*mcp.CallToolResult, any, error) {
-	result := g.planAccess(g.principalOf(ctx), req.Session.ID())
+	result := g.planAccess(g.principalOf(ctx), g.connKey(ctx, req.Session.ID()))
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: planAccessText(result.Held, result.Available, result.Guidance)}}}, result, nil
 }
 
@@ -1193,7 +1342,7 @@ func (g *Gateway) handleApprove(ctx context.Context, req *mcp.CallToolRequest, a
 	// Approval is a deliberate hand-down by the PARENT: the calling connection must itself
 	// be bound to the approving session. Handle possession alone is not enough — the child
 	// knows escalation ids, and must never be able to approve its own request.
-	if bound := g.getSession(req.Session.ID()); bound != a.Session {
+	if bound := g.getSession(g.connKey(ctx, req.Session.ID())); bound != a.Session {
 		log.Printf("approve_escalation REJECTED — connection is bound to %q, not the approving session %q", bound, a.Session)
 		return toolError("approve_escalation must be called from the connection that holds the approving session"), nil, nil
 	}
@@ -1228,7 +1377,7 @@ type revokeArgs struct {
 // the next tool call re-consents. Self-service only — a connection can revoke nothing but what
 // it holds, so this is safe to expose without a human.
 func (g *Gateway) handleRevoke(ctx context.Context, req *mcp.CallToolRequest, a revokeArgs) (*mcp.CallToolResult, any, error) {
-	connID := req.Session.ID()
+	connID := g.connKey(ctx, req.Session.ID())
 	handle := g.getSession(connID)
 	if handle == "" {
 		return text("Nothing to revoke — this connection holds no active grant."), nil, nil
@@ -1269,16 +1418,38 @@ func makeVerifier(st store.Store, targetID string) auth.TokenVerifier {
 			Expiration: time.Now().AddDate(100, 0, 0), // agent keys don't expire; they're revoked
 			// Extra threads the caller's durable identity (key prefix/name) and resolved IP to the
 			// activity log; key_name survives rotation, so it is the aggregation key there.
-			Extra: map[string]any{
-				"user":             k.UserID,
-				"key_prefix":       k.Prefix,
-				"key_name":         k.Name,
-				"remote_ip":        remoteIP(r),
-				"consent_channels": k.ConsentChannels,
-			},
+			Extra: tokenExtra(k, r),
 		}, nil
 	}
 }
+
+// tokenExtra is the per-request identity the verifiers thread through the TokenInfo: the key's
+// durable name/prefix, the resolved IP, its consent-channel policy, the agent target it was
+// issued for (if any), and the caller's own session — the X-Delegent-Session header an agent
+// echoes so its calls are linked to the task it is working (see connKey). The header is a
+// lineage tag, not a credential: an unknown or dead handle is refused at grant time, and a
+// missing one simply makes the call parentless.
+func tokenExtra(k *store.AgentKey, r *http.Request) map[string]any {
+	extra := map[string]any{
+		"user":             k.UserID,
+		"key_prefix":       k.Prefix,
+		"key_name":         k.Name,
+		"remote_ip":        remoteIP(r),
+		"consent_channels": k.ConsentChannels,
+	}
+	if k.AgentTargetID != "" {
+		extra["agent_target"] = k.AgentTargetID
+	}
+	if r != nil {
+		if p := strings.TrimSpace(r.Header.Get(a2a.SessionHeader)); p != "" {
+			extra["parent_session"] = p
+		}
+	}
+	return extra
+}
+
+// TargetKindA2A marks a target that is an A2A agent rather than an MCP server.
+const TargetKindA2A = "a2a"
 
 // loadConfig reads the fronted vendor's configuration from the store: the target's adapter
 // and advisor documents (parsed with the same code that read them off disk), and its
