@@ -60,6 +60,11 @@ func cmdServe(args []string) error {
 	mux.Handle("/mcp/{target}", registry)
 	mux.HandleFunc("/mcp", registry.ServeAggregate)
 	mux.HandleFunc("/mcp/{$}", registry.ServeAggregate)
+	// the native A2A surface: each fronted agent's card and JSON-RPC endpoint, plus an index
+	mux.HandleFunc("GET /a2a", registry.ServeA2AIndex)
+	mux.HandleFunc("GET /a2a/{$}", registry.ServeA2AIndex)
+	mux.HandleFunc("/a2a/{target}", registry.ServeA2A)
+	mux.HandleFunc("/a2a/{target}/{rest...}", registry.ServeA2A)
 	mountAdmin(mux, e, registry, tgm)
 	if err := mountWeb(mux, e, registry); err != nil {
 		return fmt.Errorf("dashboard: %w", err)

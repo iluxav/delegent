@@ -94,6 +94,16 @@ live). That one header is the whole integration:
 - **Without it** the call is parentless: the agent's own key policy applies, the prompt says
   `registered agent 'researcher' — no parent task given`, and the human decides.
 
+**Agents that speak A2A on the way out too** need no MCP client. Delegent serves every fronted
+agent's card at `/a2a/<target>/.well-known/agent-card.json`, rewritten so the URL is Delegent's
+and the auth is a Delegent key, and speaks `message/send`, `tasks/get` and `tasks/cancel` at
+`/a2a/<target>` (`GET /a2a` lists them all — the registry a client discovers peers from). Point
+an agent's existing A2A client at that URL with its Delegent key and echo the session header:
+each message takes the same guarded path a tool call takes. A message parks on consent as a
+task in `auth-required` whose id resumes it on `tasks/get` once the operator decided
+(`DELEGENT_A2A_CONSENT_WAIT`, default 5m, is how long the call itself waits first). Name the
+skill in `message.metadata.skill` for a multi-skill agent; streaming is not offered (poll).
+
 A skill takes free text, so per-skill policy is coarser than per-tool policy: the drafted
 effect comes from the skill's name and tags, and the operator signs it like any tool. Long
 tasks are polled, with state changes reaching the calling client as MCP progress; a task

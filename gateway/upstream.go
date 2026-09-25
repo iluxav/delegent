@@ -220,6 +220,11 @@ func (u *a2aUpstream) Call(ctx context.Context, c UpstreamCall) (*mcp.CallToolRe
 		out.IsError = true
 	}
 	out.StructuredContent = map[string]any{"text": res.Text, "state": res.State, "task_id": res.TaskID, "context_id": res.ContextID}
+	if wantsRawA2A(ctx) {
+		if m := rawA2A(res); m != nil {
+			out.Meta = mcp.Meta{rawA2AMeta: m}
+		}
+	}
 	return out, nil
 }
 
@@ -273,6 +278,29 @@ func (u *a2aUpstream) remember(key string, res *a2a.Result) {
 	if _, ok := u.inflight[key]; !ok {
 		u.inflight[key] = inflightTask{taskID: res.TaskID, startedAt: time.Now()}
 	}
+}
+
+// skillTool maps a skill id from message metadata to its tool name; with no id, the agent's
+// sole skill; "" when the agent has several and none was named.
+func (u *a2aUpstream) skillTool(skillID string) string {
+	if skillID != "" {
+		if _, ok := u.skills[a2a.ToolName(skillID)]; ok {
+			return a2a.ToolName(skillID)
+		}
+		return ""
+	}
+	if len(u.card.Skills) == 1 {
+		return a2a.ToolName(u.card.Skills[0].ID)
+	}
+	return ""
+}
+
+func (u *a2aUpstream) skillIDs() []string {
+	var out []string
+	for _, sk := range u.card.Skills {
+		out = append(out, sk.ID)
+	}
+	return out
 }
 
 // Headline is the short action the consent prompt shows for a skill ("research a topic"),

@@ -63,6 +63,8 @@ type Gateway struct {
 	// pending holds widget-mode consent asks awaiting the human's decision — single-use,
 	// short-TTL nonces redeemed by submit_consent_decision.
 	pending *pendingStore
+	// a2a is the native A2A surface's parked calls (see a2aserve.go); nil until first use.
+	a2a *a2aState
 
 	// notifier, when set (wired by the Registry), is pinged after a console consent request is
 	// durably parked, so out-of-band channels (telegram, …) can alert the owner. Best-effort
@@ -754,6 +756,18 @@ func (g *Gateway) consentUI(ctx context.Context, ss *mcp.ServerSession, handle s
 }
 
 func (e *elicitConsent) Ask(r controlplane.ConsentRequest) (*controlplane.ConsentAnswer, error) {
+	if e.ss == nil {
+		if os.Getenv("DELEGENT_AUTOGRANT") != "" {
+			var keyed []string
+			for _, sc := range r.Scopes {
+				keyed = append(keyed, sc.Scope)
+			}
+			log.Printf("⚠️ no dialog on this connection — AUTO-GRANTING (DELEGENT_AUTOGRANT is set; never use in production)")
+			return &controlplane.ConsentAnswer{Granted: keyed, TTLMinutes: ttlDefault().Minutes, BudgetUSD: 5}, nil
+		}
+		log.Printf("🔒 no consent dialog on this connection — DENYING")
+		return nil, nil
+	}
 	props := map[string]any{}
 	keyed := make([]string, len(r.Scopes))
 	for i, sc := range r.Scopes {
@@ -890,115 +904,125 @@ func (g *Gateway) vendorTool(name string) mcp.ToolHandler {
 		// Pull the agent's self-declared intent and strip it so it never reaches the vendor. The
 		// stripped args are what get classified, forwarded, and charged from here on.
 		intent, args := stripIntent(args)
-		body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}}
-		amount := 0.0
-		if v, ok := args["amount"].(float64); ok {
-			amount = v
+		return g.guardedCall(ctx, req.Session.ID(), req.Session, name, args, intent, req.Params.Arguments)
+	}
+}
+
+// guardedCall is the one authorization path every vendor call takes, whatever surface it came
+// in on: classify, authorize against the caller's session (opening consent on the caller's
+// channel when it lacks the scope), charge, forward. rawConn is the caller's connection id
+// (an MCP session, or the synthetic id an A2A caller gets); elicit is the MCP session an
+// in-chat dialog can be shown on, or nil for a caller with no dialog (console consent then).
+// raw is the call's arguments as received, for the activity log.
+func (g *Gateway) guardedCall(ctx context.Context, rawConn string, elicit *mcp.ServerSession, name string, args map[string]any, intent string, raw json.RawMessage) (*mcp.CallToolResult, error) {
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}}
+	amount := 0.0
+	if v, ok := args["amount"].(float64); ok {
+		amount = v
+	}
+	creq := core.Request{Action: "POST", Resource: "/mcp", Amount: amount, Body: body}
+	c := core.Classify(g.adapter, creq)
+	connID := g.connKey(ctx, rawConn)
+	handle := g.resumeSession(connID)
+
+	// The legible consent context for this call — action/target/intent/effect — threaded into
+	// whichever consent channel this connection uses.
+	meta := callMeta{Tool: name, ToolDesc: g.toolDesc[name], Target: g.targetID, Intent: intent, Detail: g.callDetail(name, args), Effect: c.Effect, Semantics: g.toolSem[name]}
+
+	// Activity log: the tool call as it arrived (params captured per the payloads flag). Emitted
+	// HERE, before the authorize/consent branch, so the declared intent is recorded on EVERY
+	// vendor call — including one that sails through under a grant already held (no prompt).
+	g.emit(g.toolCallEvent(ctx, connID, name, intent, raw))
+
+	// Authorize: forward straight through if the session already holds the scope, else open
+	// the consent dialog for exactly the scopes this call needs.
+	if handle == "" || func() bool { _, d, _ := g.br.Authorize(handle, creq); return !d.Allow }() {
+		if c.Unknown {
+			log.Printf("🔒 %s DENIED — unknown tool (fail closed)", name)
+			errEv := g.eventBase(ctx, connID)
+			errEv.Type = store.EventError
+			errEv.Tool = name
+			errEv.Reason = "unknown tool — not classified (fail closed)"
+			g.emit(errEv)
+			return toolError("🔒 DELEGENT: '" + name + "' is not classified — denied (fail closed). No scope can grant it."), nil
 		}
-		creq := core.Request{Action: "POST", Resource: "/mcp", Amount: amount, Body: body}
-		c := core.Classify(g.adapter, creq)
-		connID := g.connKey(ctx, req.Session.ID())
-		handle := g.resumeSession(connID)
 
-		// The legible consent context for this call — action/target/intent/effect — threaded into
-		// whichever consent channel this connection uses.
-		meta := callMeta{Tool: name, ToolDesc: g.toolDesc[name], Target: g.targetID, Intent: intent, Detail: g.callDetail(name, args), Effect: c.Effect, Semantics: g.toolSem[name]}
-
-		// Activity log: the tool call as it arrived (params captured per the payloads flag). Emitted
-		// HERE, before the authorize/consent branch, so the declared intent is recorded on EVERY
-		// vendor call — including one that sails through under a grant already held (no prompt).
-		g.emit(g.toolCallEvent(ctx, connID, name, intent, req.Params.Arguments))
-
-		// Authorize: forward straight through if the session already holds the scope, else open
-		// the consent dialog for exactly the scopes this call needs.
-		if handle == "" || func() bool { _, d, _ := g.br.Authorize(handle, creq); return !d.Allow }() {
-			if c.Unknown {
-				log.Printf("🔒 %s DENIED — unknown tool (fail closed)", name)
-				errEv := g.eventBase(ctx, connID)
-				errEv.Type = store.EventError
-				errEv.Tool = name
-				errEv.Reason = "unknown tool — not classified (fail closed)"
-				g.emit(errEv)
-				return toolError("🔒 DELEGENT: '" + name + "' is not classified — denied (fail closed). No scope can grant it."), nil
-			}
-
-			// A call under a parent session that could never be granted (dead parent, no
-			// delegation depth left) is refused here, before any human is asked.
-			if handle == "" {
-				if why := g.br.CheckLineage(g.principalOf(ctx), parentFromContext(ctx)); why != "" {
-					log.Printf("🔒 %s DENIED — %s", name, why)
-					denyEv := g.eventBase(ctx, connID)
-					denyEv.Type = store.EventPermissionDenied
-					denyEv.Tool = name
-					denyEv.Scopes = c.Scopes
-					denyEv.Reason = why
-					g.emit(denyEv)
-					g.cp.RecordDeny(g.principalOf(ctx), c.Scopes, why)
-					return toolError("🔒 DELEGENT: '" + name + "' cannot be granted on this call — " + why + ". Tell the caller; do not retry."), nil
-				}
-			}
-
-			// A vendor call that needs consent: record the ask before routing to a channel.
-			reqEv := g.eventBase(ctx, connID)
-			reqEv.Type = store.EventPermissionRequested
-			reqEv.Tool = name
-			reqEv.Scopes = c.Scopes
-			reqEv.Reason = "tool: " + name
-			g.emit(reqEv)
-			// DELEGENT_AUTOGRANT (scripts/tests) is the highest-priority override: it bypasses
-			// mode routing entirely and takes the elicitation path below, which auto-answers
-			// when the client cannot show a dialog. Otherwise route by the client's channel:
-			// widget-capable clients get the two-phase widget flow; clients with NEITHER
-			// elicitation nor the widget (e.g. ChatGPT) get the console channel — park and BLOCK
-			// until a human GRANTs in the web console. The vendor tool is NOT executed on either
-			// non-elicit path; the model retries after a grant.
-			if os.Getenv("DELEGENT_AUTOGRANT") == "" {
-				switch g.consentModeFor(connID) {
-				case consentWidget:
-					return g.widgetConsentInstruction(ctx, connID, name, c.Scopes, meta), nil
-				case consentConsole:
-					return g.consoleConsentBlock(ctx, connID, name, c.Scopes, meta), nil
-				}
-			}
-			nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), handle, c.Scopes, "tool: "+name, g.consentUI(ctx, req.Session, handle, meta), g.lineageOf(ctx))
-			if !granted {
-				log.Printf("🔒 %s DENIED — %s", name, msg)
+		// A call under a parent session that could never be granted (dead parent, no
+		// delegation depth left) is refused here, before any human is asked.
+		if handle == "" {
+			if why := g.br.CheckLineage(g.principalOf(ctx), parentFromContext(ctx)); why != "" {
+				log.Printf("🔒 %s DENIED — %s", name, why)
 				denyEv := g.eventBase(ctx, connID)
 				denyEv.Type = store.EventPermissionDenied
 				denyEv.Tool = name
 				denyEv.Scopes = c.Scopes
-				denyEv.Reason = msg
+				denyEv.Reason = why
 				g.emit(denyEv)
-				return toolError("🔒 DELEGENT: '" + name + "' needs " + strings.Join(c.Scopes, ", ") + " — not granted. " + msg), nil
-			}
-			if handle == "" {
-				g.setSession(connID, nh)
-				handle = nh
-				log.Printf("[delegent] session %s (%s) minted for connection %s", nh, g.br.AgentDisplayName(nh), connID)
-			}
-			grantEv := g.eventBase(ctx, connID)
-			grantEv.Type = store.EventPermissionGranted
-			grantEv.Tool = name
-			grantEv.Scopes = g.br.LiveScopes(handle)
-			grantEv.Reason = "tool: " + name
-			g.emit(grantEv)
-			if _, d, _ := g.br.Authorize(handle, creq); !d.Allow {
-				return toolError("🔒 DELEGENT: '" + name + "' denied — " + d.Reason), nil
+				g.cp.RecordDeny(g.principalOf(ctx), c.Scopes, why)
+				return toolError("🔒 DELEGENT: '" + name + "' cannot be granted on this call — " + why + ". Tell the caller; do not retry."), nil
 			}
 		}
 
-		// Spending calls are charged atomically against the session budget — the ceiling the
-		// human set in the consent dialog, enforced so it cannot be raced past.
-		if c.Effect&core.EffectSpends != 0 {
-			if ok, msg := g.br.Charge(handle, amount, name); !ok {
-				log.Printf("🔒 %s DENIED — %s", name, msg)
-				return toolError("🔒 DELEGENT: '" + name + "' refused — " + msg), nil
+		// A vendor call that needs consent: record the ask before routing to a channel.
+		reqEv := g.eventBase(ctx, connID)
+		reqEv.Type = store.EventPermissionRequested
+		reqEv.Tool = name
+		reqEv.Scopes = c.Scopes
+		reqEv.Reason = "tool: " + name
+		g.emit(reqEv)
+		// DELEGENT_AUTOGRANT (scripts/tests) is the highest-priority override: it bypasses
+		// mode routing entirely and takes the elicitation path below, which auto-answers
+		// when the client cannot show a dialog. Otherwise route by the client's channel:
+		// widget-capable clients get the two-phase widget flow; clients with NEITHER
+		// elicitation nor the widget (e.g. ChatGPT) get the console channel — park and BLOCK
+		// until a human GRANTs in the web console. The vendor tool is NOT executed on either
+		// non-elicit path; the model retries after a grant.
+		if os.Getenv("DELEGENT_AUTOGRANT") == "" {
+			switch g.consentModeFor(connID) {
+			case consentWidget:
+				return g.widgetConsentInstruction(ctx, connID, name, c.Scopes, meta), nil
+			case consentConsole:
+				return g.consoleConsentBlock(ctx, connID, name, c.Scopes, meta), nil
 			}
 		}
-
-		log.Printf("✅ %s ALLOWED (%s)", name, core.EffectNames(c.Effect))
-		return g.forward(ctx, connID, handle, name, args)
+		nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), handle, c.Scopes, "tool: "+name, g.consentUI(ctx, elicit, handle, meta), g.lineageOf(ctx))
+		if !granted {
+			log.Printf("🔒 %s DENIED — %s", name, msg)
+			denyEv := g.eventBase(ctx, connID)
+			denyEv.Type = store.EventPermissionDenied
+			denyEv.Tool = name
+			denyEv.Scopes = c.Scopes
+			denyEv.Reason = msg
+			g.emit(denyEv)
+			return toolError("🔒 DELEGENT: '" + name + "' needs " + strings.Join(c.Scopes, ", ") + " — not granted. " + msg), nil
+		}
+		if handle == "" {
+			g.setSession(connID, nh)
+			handle = nh
+			log.Printf("[delegent] session %s (%s) minted for connection %s", nh, g.br.AgentDisplayName(nh), connID)
+		}
+		grantEv := g.eventBase(ctx, connID)
+		grantEv.Type = store.EventPermissionGranted
+		grantEv.Tool = name
+		grantEv.Scopes = g.br.LiveScopes(handle)
+		grantEv.Reason = "tool: " + name
+		g.emit(grantEv)
+		if _, d, _ := g.br.Authorize(handle, creq); !d.Allow {
+			return toolError("🔒 DELEGENT: '" + name + "' denied — " + d.Reason), nil
+		}
 	}
+
+	// Spending calls are charged atomically against the session budget — the ceiling the
+	// human set in the consent dialog, enforced so it cannot be raced past.
+	if c.Effect&core.EffectSpends != 0 {
+		if ok, msg := g.br.Charge(handle, amount, name); !ok {
+			log.Printf("🔒 %s DENIED — %s", name, msg)
+			return toolError("🔒 DELEGENT: '" + name + "' refused — " + msg), nil
+		}
+	}
+
+	log.Printf("✅ %s ALLOWED (%s)", name, core.EffectNames(c.Effect))
+	return g.forward(ctx, connID, handle, name, args)
 }
 
 // forward calls the upstream vendor tool and returns its own result transparently. It is also

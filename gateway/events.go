@@ -78,12 +78,23 @@ func channelPolicyFromContext(ctx context.Context) []string {
 // that the verifier threaded through the TokenInfo Extra. Empty when auth is off, or when the
 // call carried no header (a root call).
 func parentFromContext(ctx context.Context) string {
+	if p, _ := ctx.Value(parentOverrideKey{}).(string); p != "" {
+		return p
+	}
 	ti := auth.TokenInfoFromContext(ctx)
 	if ti == nil || ti.Extra == nil {
 		return ""
 	}
 	p, _ := ti.Extra["parent_session"].(string)
 	return p
+}
+
+type parentOverrideKey struct{}
+
+// withParent sets the caller's parent session for surfaces that carry it in the body rather
+// than a header (an A2A message's metadata), when no header named one.
+func withParent(ctx context.Context, parent string) context.Context {
+	return context.WithValue(ctx, parentOverrideKey{}, parent)
 }
 
 // agentTargetFromContext reads the agent target the calling key was issued for ("" for a

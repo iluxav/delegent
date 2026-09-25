@@ -343,7 +343,11 @@ func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason stri
 		}
 	}()
 
-	outcome, decided := awaitConsent(ctx, pc.done, g.consentSyncWait())
+	wait := g.consentSyncWait()
+	if d := consentWaitFromContext(ctx); d > 0 {
+		wait = d
+	}
+	outcome, decided := awaitConsent(ctx, pc.done, wait)
 	close(stopBeat)
 	g.pending.setWaiting(pc.ID, false)
 	if !decided { // close the race between the timer firing and a just-landed resolve
