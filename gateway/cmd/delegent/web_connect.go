@@ -1,8 +1,8 @@
 package main
 
-// The connect pane: agent keys, and the config snippet to paste into each kind of AI client.
+// Client configuration snippets and the dedicated agent-key management page.
 // A key's plaintext exists only at mint time, so the snippets carry a placeholder until you
-// mint or roll one here — then they are rendered with the real key, once.
+// mint or roll one on the Keys page — then they are rendered with the real key, once.
 
 import (
 	"encoding/json"
@@ -91,12 +91,13 @@ func channelPresets() []channelPreset {
 // OAuth, the agent signs in through the dashboard and no key is involved at all. Alt* is the
 // fallback for a client you would rather launch locally with a minted key.
 type snippet struct {
-	ID    string // tab id
-	Label string // tab label
-	File  string // where the primary form goes
-	Note  string
-	Cmd   string // a one-line CLI that does the whole thing, when the client has one
-	JSON  string // the remote form: url only
+	ID       string // stable client id
+	Label    string // client name
+	Category string // short description shown in the client picker
+	File     string // where the primary form goes
+	Note     string
+	Cmd      string // a one-line CLI that does the whole thing, when the client has one
+	JSON     string // the remote form: url only
 
 	AltFile, AltNote, AltJSON string // the agent-key form (stdio)
 }
@@ -202,7 +203,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 
 	return []snippet{
 		{
-			ID: "claude-code", Label: "Claude Code",
+			ID: "claude-code", Label: "Claude Code", Category: "Terminal",
 			File:    "one command, from anywhere",
 			Cmd:     "claude mcp add --transport http delegent " + url,
 			Note:    signInNote + " Run /mcp in Claude Code afterwards and pick Authenticate.",
@@ -212,7 +213,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			AltJSON: mcpServers(stdio),
 		},
 		{
-			ID: "claude-desktop", Label: "Claude Desktop",
+			ID: "claude-desktop", Label: "Claude Desktop", Category: "Desktop app",
 			File:    "Settings → Connectors → Add custom connector",
 			Cmd:     url,
 			Note:    signInNote + " Paste the URL above as a custom connector; Claude Desktop opens the sign-in itself.",
@@ -222,7 +223,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			AltJSON: mcpServers(stdio),
 		},
 		{
-			ID: "cursor", Label: "Cursor",
+			ID: "cursor", Label: "Cursor", Category: "Code editor",
 			File:    "~/.cursor/mcp.json, or .cursor/mcp.json in the project",
 			Note:    signInNote,
 			JSON:    remote,
@@ -231,7 +232,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			AltJSON: mcpServers(stdio),
 		},
 		{
-			ID: "vscode", Label: "VS Code",
+			ID: "vscode", Label: "VS Code", Category: "Code editor",
 			File:    ".vscode/mcp.json",
 			Note:    signInNote + " VS Code names the map \"servers\" and wants an explicit type.",
 			JSON:    mustJSON(map[string]any{"servers": map[string]any{"delegent": map[string]any{"type": "http", "url": url}}}),
@@ -242,7 +243,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			}}}),
 		},
 		{
-			ID: "hermes", Label: "Hermes",
+			ID: "hermes", Label: "Hermes", Category: "Terminal",
 			File:    "one command, from anywhere — paste a minted key when it asks",
 			Cmd:     "hermes mcp add delegent --url " + url + " --auth header",
 			Note:    "Hermes stores the key in ~/.hermes/.env and references it from config.yaml. Use --auth oauth instead to sign in through Delegent with no key. Hermes has no consent dialog of its own, so approvals land in this dashboard's Alerts (or telegram / the CLI).",
@@ -252,7 +253,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			AltJSON: hermesYAML(map[string]string{"command": cmd}, nil, env),
 		},
 		{
-			ID: "pi", Label: "Pi",
+			ID: "pi", Label: "Pi", Category: "Terminal",
 			File:    "once: install the MCP adapter (Pi has no built-in MCP), then restart Pi",
 			Cmd:     "pi install npm:pi-mcp-adapter",
 			Note:    "Then save the configuration as ~/.config/mcp/mcp.json (every project) or .mcp.json in the project. The adapter adds one proxy tool that discovers Delegent's tools on demand; /mcp inside Pi lists the servers. Delegent's consent dialog appears in Pi's own prompts (the adapter supports elicitation).",
@@ -262,7 +263,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			AltJSON: mcpServers(stdio),
 		},
 		{
-			ID: "openai", Label: "ChatGPT / OpenAI",
+			ID: "openai", Label: "ChatGPT / OpenAI", Category: "Chat & API",
 			File: "an MCP tool on the Responses API",
 			Note: "Remote MCP, so OpenAI's servers must reach this gateway — put it behind a public URL (a tunnel) and swap the host. It will sign in through Delegent the same way.",
 			JSON: mustJSON(openaiTool{
@@ -276,7 +277,7 @@ func (w *webApp) buildSnippets(key string) []snippet {
 			}),
 		},
 		{
-			ID: "http", Label: "Any HTTP client",
+			ID: "http", Label: "Any HTTP client", Category: "Custom integration",
 			File:    "streamable HTTP",
 			Note:    "An unauthenticated call answers 401 with WWW-Authenticate pointing at this gateway's OAuth metadata. /mcp/<server> instead of /mcp pins a single server.",
 			JSON:    remote,
@@ -287,7 +288,8 @@ func (w *webApp) buildSnippets(key string) []snippet {
 	}
 }
 
-// connectView assembles the pane. plaintext is non-empty only right after a mint or roll.
+// connectView assembles key management and client snippets. Plaintext is non-empty only
+// right after a mint or roll.
 func (w *webApp) connectView(r *http.Request, plaintext string) connectView {
 	key := plaintext
 	v := connectView{Minted: plaintext}
@@ -344,6 +346,29 @@ func (w *webApp) connectPane(rw http.ResponseWriter, r *http.Request) {
 	w.render(rw, "connect", w.connectView(r, ""))
 }
 
+func (w *webApp) keysPage(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set("Cache-Control", "no-store")
+	w.page(rw, r, "", "keysPage", w.connectView(r, ""))
+}
+
+// Key changes replace the management page and refresh client snippets out of band.
+// Plaintext is confined to the mint/rotate response; reloads only see placeholders.
+func (w *webApp) renderKeys(rw http.ResponseWriter, r *http.Request, v connectView) {
+	rw.Header().Set("Cache-Control", "no-store")
+	if v.Error != "" {
+		v.MintName = r.FormValue("name")
+	}
+	if r.Header.Get("HX-Request") != "" && r.Header.Get("HX-Boosted") == "" {
+		rw.Header().Set("HX-Push-Url", "/keys")
+		w.render(rw, "keysResult", v)
+		return
+	}
+	w.render(rw, "page", pageData{
+		Targets: w.targetRows(r), User: w.auth.username(), Version: version,
+		Main: w.partial("keysPage", v), Connect: w.partial("connect", v),
+	})
+}
+
 func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
 	agent := strings.TrimSpace(r.FormValue("agent"))
@@ -352,7 +377,7 @@ func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 		if t, err := w.e.st.GetTarget(r.Context(), agent); err != nil || t.Kind != gateway.TargetKindA2A {
 			v := w.connectView(r, "")
 			v.Error = fmt.Sprintf("%q is not a registered agent", agent)
-			w.render(rw, "connect", v)
+			w.renderKeys(rw, r, v)
 			return
 		}
 		if name == "" {
@@ -362,7 +387,7 @@ func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		v := w.connectView(r, "")
 		v.Error = "give the key a name — events and rolls are tracked by it"
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	a := &adminEnv{e: w.e, reg: w.reg}
@@ -370,24 +395,24 @@ func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	v := w.connectView(r, plaintext)
 	v.Notice = fmt.Sprintf("Key %q minted (%s). Copy it now — it is never shown again.", name, row.Prefix)
-	w.render(rw, "connect", v)
+	w.renderKeys(rw, r, v)
 }
 
 func (w *webApp) revokeKey(rw http.ResponseWriter, r *http.Request) {
 	if err := w.e.st.RevokeAgentKey(r.Context(), r.PathValue("id"), nowMillis()); err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	v := w.connectView(r, "")
 	v.Notice = "Key revoked. An agent holding it is refused at its next connection."
-	w.render(rw, "connect", v)
+	w.renderKeys(rw, r, v)
 }
 
 // rollKey mints a replacement under the same name, then revokes the old one — mint first, so
@@ -398,7 +423,7 @@ func (w *webApp) rollKey(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		v := w.connectView(r, "")
 		v.Error = "no such key"
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	a := &adminEnv{e: w.e, reg: w.reg}
@@ -406,18 +431,18 @@ func (w *webApp) rollKey(rw http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	if err := w.e.st.RevokeAgentKey(ctx, old.ID, nowMillis()); err != nil {
 		v := w.connectView(r, plaintext)
 		v.Error = fmt.Sprintf("new key minted (%s) but revoking the old one failed: %v", row.Prefix, err)
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	v := w.connectView(r, plaintext)
 	v.Notice = fmt.Sprintf("Rolled %q — the old key is revoked. Copy the new one now.", old.Name)
-	w.render(rw, "connect", v)
+	w.renderKeys(rw, r, v)
 }
 
 // setKeyChannels stores which channel this key's agent is asked through. The console is always
@@ -435,18 +460,18 @@ func (w *webApp) setKeyChannels(rw http.ResponseWriter, r *http.Request) {
 	if err := validateChannels(channels); err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	if err := w.e.st.SetAgentKeyConsentChannels(r.Context(), r.PathValue("id"), channels); err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()
-		w.render(rw, "connect", v)
+		w.renderKeys(rw, r, v)
 		return
 	}
 	v := w.connectView(r, "")
 	v.Notice = "Consent channel set to " + presetLabel(channels) + ". It applies the next time that agent connects."
-	w.render(rw, "connect", v)
+	w.renderKeys(rw, r, v)
 }
 
 // clientName resolves a registered agent's display name, falling back to the id if the

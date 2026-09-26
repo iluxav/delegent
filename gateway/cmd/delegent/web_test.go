@@ -163,6 +163,33 @@ func TestDashboardTargets(t *testing.T) {
 	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
 
 	// add: introspects, drafts read_file as files:read, redirects to the target
+	checkOverview := func(want string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/", nil)
+		req.Header.Set("HX-Request", "true")
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(res.Body)
+		body := buf.String()
+		if res.StatusCode != http.StatusOK || strings.Contains(body, "<!doctype") || !strings.Contains(body, `data-page="overview"`) {
+			t.Fatalf("overview navigation must return just the workspace: %d\n%s", res.StatusCode, body)
+		}
+		var counts []string
+		for _, match := range regexp.MustCompile(`(?s)class="overview-stat[^\"]*".*?<strong>(\d+)`).FindAllStringSubmatch(body, -1) {
+			counts = append(counts, match[1])
+		}
+		if got := strings.Join(counts, ","); got != want {
+			t.Errorf("overview server/tool/enabled/pending counts = %s, want %s", got, want)
+		}
+		if want != "0,0,0,0" && !strings.Contains(body, `href="/targets/fake"`) {
+			t.Error("overview must link to the connected server")
+		}
+	}
+	checkOverview("0,0,0,0")
 	res, _ := post(t, c, ts.URL+"/targets", url.Values{"name": {"fake"}, "endpoint": {upstream.URL}}, true)
 	if res.StatusCode != 204 || res.Header.Get("HX-Redirect") != "/targets/fake" {
 		t.Fatalf("add target: %d %q", res.StatusCode, res.Header.Get("HX-Redirect"))
@@ -170,6 +197,7 @@ func TestDashboardTargets(t *testing.T) {
 	if code, body := get(t, c, ts.URL+"/targets/fake"); code != 200 || !strings.Contains(body, "read_file") || !strings.Contains(body, `value="files:read"`) {
 		t.Fatalf("target page: %d\n%s", code, body)
 	}
+	checkOverview("1,1,1,0")
 
 	// edit the mapping: read_file becomes a write on files:write
 	_, body := post(t, c, ts.URL+"/targets/fake/policy", url.Values{"tool": {"read_file"}, "effect.read_file": {"write"}, "scope.read_file": {"files:write"}}, true)
@@ -189,6 +217,7 @@ func TestDashboardTargets(t *testing.T) {
 	if _, body := post(t, c, ts.URL+"/targets/fake/enabled", url.Values{"enabled": {"false"}}, true); !strings.Contains(body, "Target disabled") {
 		t.Fatal("disable")
 	}
+	checkOverview("1,1,0,0")
 	if _, body := post(t, c, ts.URL+"/targets/fake/introspect", url.Values{}, true); !strings.Contains(body, "already covers") {
 		t.Fatalf("re-introspect with nothing new:\n%s", body)
 	}
@@ -205,9 +234,30 @@ func TestDashboardKeysAndSnippets(t *testing.T) {
 	code := codeRE.FindStringSubmatch(logs.String())[1]
 	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
 
-	// with no keys the snippets carry the placeholder and say so
-	_, body := get(t, c, ts.URL+"/connect")
-	if !strings.Contains(body, "No keys yet") || !strings.Contains(body, "dgk_…") {
+	// Key management has its own authenticated, directly reachable page.
+	_, body := get(t, c, ts.URL+"/keys")
+	if !strings.Contains(body, "No keys yet") || !strings.Contains(body, `data-page="keys"`) || !strings.Contains(body, `data-nav="keys"`) || !strings.Contains(body, "<!doctype") {
+		t.Fatalf("empty keys page:\n%s", body)
+	}
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/keys", nil)
+	req.Header.Set("HX-Request", "true")
+	res, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var partial bytes.Buffer
+	_, _ = partial.ReadFrom(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.Contains(partial.String(), `data-page="keys"`) || strings.Contains(partial.String(), "<!doctype") {
+		t.Fatal("htmx keys navigation should render just the management page")
+	}
+	if _, body := get(t, browser(t), ts.URL+"/keys"); !strings.Contains(body, "Sign in") || strings.Contains(body, `data-page="keys"`) {
+		t.Fatal("the keys page must require a dashboard session")
+	}
+
+	// The connection pane keeps the snippets, with a link to key management.
+	_, body = get(t, c, ts.URL+"/connect")
+	if !strings.Contains(body, `href="/keys"`) || !strings.Contains(body, "dgk_…") || strings.Contains(body, "key-create-form") || strings.Contains(body, "key-list") {
 		t.Fatalf("empty connect pane:\n%s", body)
 	}
 	for _, want := range []string{"Claude Code", "Claude Desktop", "Cursor", "VS Code", "Hermes", "Pi", "ChatGPT / OpenAI", "Any HTTP client"} {
@@ -222,7 +272,10 @@ func TestDashboardKeysAndSnippets(t *testing.T) {
 	}
 
 	// minting shows the plaintext once and bakes it into every snippet
-	_, body = post(t, c, ts.URL+"/keys", url.Values{"name": {"laptop"}}, true)
+	res, body = post(t, c, ts.URL+"/keys", url.Values{"name": {"laptop"}}, true)
+	if res.Header.Get("HX-Push-Url") != "/keys" || res.Header.Get("Cache-Control") != "no-store" || !strings.Contains(body, `data-page="keys"`) || !strings.Contains(body, `id="connect" hx-swap-oob="innerHTML"`) {
+		t.Fatal("minting must update Keys and fill the connection snippets without caching the secret")
+	}
 	m := regexp.MustCompile(`(dgk_[A-Za-z0-9_-]{24,})`).FindStringSubmatch(body)
 	if m == nil {
 		t.Fatalf("no plaintext key in the mint response:\n%s", body)
@@ -244,9 +297,11 @@ func TestDashboardKeysAndSnippets(t *testing.T) {
 		t.Error("expected the OpenAI and VS Code shapes to differ from the mcpServers one")
 	}
 
-	// reloading the pane cannot show a stored key again
-	if _, body := get(t, c, ts.URL+"/connect"); strings.Contains(body, key) || !strings.Contains(body, "dgk_…") {
-		t.Error("a stored key must never be rendered again")
+	// Reloading either view cannot show a stored key again.
+	for _, path := range []string{"/keys", "/connect"} {
+		if _, body := get(t, c, ts.URL+path); strings.Contains(body, key) || !strings.Contains(body, "dgk_…") {
+			t.Errorf("a stored key must never be rendered again on %s", path)
+		}
 	}
 
 	// roll: a new key under the same name, the old one revoked
@@ -732,8 +787,8 @@ func TestOAuthProvider(t *testing.T) {
 		t.Errorf("issued key should record the client it was issued to, got %q", issued.OAuthClientID)
 	}
 
-	// the connect pane says so, and offers Disconnect rather than Roll
-	_, pane := get(t, operator, ts.URL+"/connect")
+	// The Keys page identifies browser connections and offers Disconnect rather than Roll.
+	_, pane := get(t, operator, ts.URL+"/keys")
 	if !strings.Contains(pane, "signed in") || !strings.Contains(pane, "approved for Claude") {
 		t.Errorf("pane should mark the signed-in connection:\n%s", pane)
 	}
@@ -875,7 +930,7 @@ func TestDashboardConsentChannels(t *testing.T) {
 		t.Fatalf("stored policy: %v", k.ConsentChannels)
 	}
 	// the picker comes back with that preset selected
-	if _, body := get(t, c, ts.URL+"/connect"); !strings.Contains(body, `value="elicitation,console" selected`) {
+	if _, body := get(t, c, ts.URL+"/keys"); !strings.Contains(body, `value="elicitation,console" selected`) {
 		t.Errorf("picker should show the stored policy as selected:\n%s", body)
 	}
 

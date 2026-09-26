@@ -1,22 +1,38 @@
+{{define "clientIcon"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">{{if eq .Category "Terminal"}}<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>{{else if eq .Category "Desktop app"}}<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>{{else if eq .Category "Code editor"}}<path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16"/>{{else if eq .Category "Chat & API"}}<path d="M8 3H6a2 2 0 0 0-2 2v4l-2 3 2 3v4a2 2 0 0 0 2 2h2m8-18h2a2 2 0 0 1 2 2v4l2 3-2 3v4a2 2 0 0 1-2 2h-2M10 12h.01M14 12h.01"/>{{else}}<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>{{end}}</svg>{{end}}
+
 {{define "connect"}}
 <div class="panel-heading">
   <h3>Connect an agent</h3>
   <button class="btn panel-close" type="button" data-panel-toggle="connect" aria-label="Close connection panel">×</button>
 </div>
 <div class="connect-content min-h-0 flex-1 overflow-y-auto">
-  {{if and .Notice (not .Minted)}}<p class="connection-notice bg-ok-soft text-ok" role="status">{{.Notice}}</p>{{end}}
-  {{if .Error}}<p class="connection-notice bg-bad-soft text-bad" role="alert">{{.Error}}</p>{{end}}
+  {{if .Minted}}<p class="connection-notice bg-ok-soft text-ok" role="status">Key-based configurations below include your new key. Copy the configuration before leaving this session.</p>{{end}}
 
   <section class="connection-section" aria-labelledby="client-setup-title">
     <h4 class="section-label" id="client-setup-title">Client configuration</h4>
-    <p class="connection-help">Choose your client, then copy its configuration.</p>
-    <div class="client-tabs" role="tablist" aria-label="Agent client">
-      {{range $i, $s := .Snippets}}
-      <button class="ctab {{if eq $i 0}}ctab-on{{end}}" data-client="{{$s.ID}}" type="button" role="tab" id="client-tab-{{$s.ID}}" aria-controls="client-{{$s.ID}}" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}" tabindex="{{if eq $i 0}}0{{else}}-1{{end}}">{{$s.Label}}</button>
-      {{end}}
+    <p class="connection-help">Pick your client for the right setup instructions.</p>
+    <div class="client-picker" id="client-picker">
+      {{$first := index .Snippets 0}}
+      <span class="sr-only" id="client-picker-label">Choose your client</span>
+      <button class="client-picker-trigger" id="client-picker-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="client-picker-menu" aria-labelledby="client-picker-label client-selected-name">
+        <span class="client-icon" data-selected-icon data-client="{{$first.ID}}">{{template "clientIcon" $first}}</span>
+        <span class="client-choice"><span id="client-selected-name">{{$first.Label}}</span><span data-selected-category>{{$first.Category}}</span></span>
+        <svg class="client-picker-chevron" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m6 8 4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="client-picker-menu" id="client-picker-menu" role="dialog" aria-label="Choose your client" hidden>
+        <div class="client-search-wrap"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="client-search" type="text" placeholder="Find a client…" aria-label="Find a client" role="combobox" aria-autocomplete="list" aria-controls="client-options" aria-expanded="false" autocomplete="off" spellcheck="false"></div>
+        <div class="client-options" id="client-options" role="listbox" aria-label="Agent clients">
+          {{range $i, $s := .Snippets}}
+          <div class="client-option" id="client-option-{{$s.ID}}" data-client="{{$s.ID}}" role="option" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}">
+            <span class="client-icon" data-client="{{$s.ID}}">{{template "clientIcon" $s}}</span><span class="client-choice"><span class="client-option-name">{{$s.Label}}</span><span class="client-option-category">{{$s.Category}}</span></span><svg class="client-option-check" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          {{end}}
+        </div>
+        <p class="client-no-results" id="client-no-results" role="status" hidden>No clients found. Try another name.</p>
+      </div>
     </div>
     {{range $i, $s := .Snippets}}
-    <div class="client-pane {{if ne $i 0}}hidden{{end}}" data-client="{{$s.ID}}" id="client-{{$s.ID}}" role="tabpanel" aria-labelledby="client-tab-{{$s.ID}}" tabindex="0">
+    <div class="client-pane {{if ne $i 0}}hidden{{end}}" data-client="{{$s.ID}}" id="client-{{$s.ID}}" role="region" aria-label="{{$s.Label}} configuration" tabindex="0">
       {{if $s.Cmd}}
       <div class="config-block">
         <div class="config-heading"><span>{{if eq $s.ID "claude-desktop"}}{{$s.File}}{{else}}Run in your terminal{{end}}</span><button class="btn snippet-copy" type="button" data-copy="#cmd-{{$s.ID}}" aria-label="Copy {{$s.Label}} {{if eq $s.ID "claude-desktop"}}URL{{else}}command{{end}}">Copy</button></div>
@@ -34,7 +50,7 @@
         <summary>Use an agent key instead</summary>
         <div class="disclosure-content">
           <p class="connection-help">{{$s.AltNote}}</p>
-          {{if $.Placeholder}}<p class="key-config-hint">Create a key in <strong>Agent keys</strong> below, then replace <code>dgk_…</code> with its value.</p>{{end}}
+          {{if $.Placeholder}}<p class="key-config-hint">Create a key on the <a class="text-accent underline" href="/keys" hx-get="/keys" hx-target="#main" hx-push-url="true" data-open-keys>Keys page</a>, then replace <code>dgk_…</code> with its value.</p>{{end}}
           <div class="config-block">
             <div class="config-heading"><span>{{$s.AltFile}}</span><button class="btn snippet-copy" type="button" data-copy="#alt-{{$s.ID}}" aria-label="Copy {{$s.Label}} agent-key configuration">Copy</button></div>
             <pre class="snippet" id="alt-{{$s.ID}}">{{$s.AltJSON}}</pre>
@@ -46,79 +62,10 @@
     {{end}}
   </section>
 
-  <section class="connection-section agent-keys-section" aria-labelledby="agent-keys-title">
-    <div class="connection-section-heading"><h4 class="section-label" id="agent-keys-title">Agent keys</h4><span class="optional-label">Optional</span></div>
-    <p class="connection-help">For clients that use a key instead of browser sign-in. Create a separate key for each agent or device.</p>
-    <form hx-post="/keys" hx-target="#connect" hx-disabled-elt="find button" class="key-create-form">
-      <label for="agent-key-name">Key name</label>
-      <div class="key-create-row"><input class="input" id="agent-key-name" name="name" placeholder="e.g. work laptop" autocomplete="off"><button class="btn btn-primary" type="submit">Create key</button></div>
-      {{if .Agents}}<label class="mt-3 block" for="agent-key-agent">Issued to an agent <span class="text-ink-faint">· optional</span></label>
-      <p class="connection-help">The key one of your A2A agents uses when it calls other servers through the gateway. Its calls are flagged as that agent's, and linked to the task it echoes in <code>X-Delegent-Session</code>.</p>
-      <select class="input" id="agent-key-agent" name="agent"><option value="">— a person’s client —</option>{{range .Agents}}<option value="{{.}}">{{.}}</option>{{end}}</select>{{end}}
-    </form>
-    {{if .Minted}}
-    <div class="minted-key" role="status">
-      <div class="connection-section-heading"><h5>Your new key <span>· shown once</span></h5><button class="btn snippet-copy" type="button" data-copy="#minted" aria-label="Copy new agent key">Copy</button></div>
-      {{if .Notice}}<p>{{.Notice}}</p>{{end}}
-      <code id="minted">{{.Minted}}</code>
-      <p>The key-based configurations above already include this value.</p>
-    </div>
-    {{end}}
-    <ul class="key-list" aria-label="Agent keys">
-      {{$hasKeys := false}}
-      {{range .Keys}}{{if not .ViaOAuth}}{{$hasKeys = true}}
-      <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
-        <div class="key-card-heading"><h5>{{.Name}}</h5><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Revoked{{else}}Active{{end}}</span></div>
-        <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span>{{if .Agent}}<span class="pill bg-panel text-ink-soft">agent · {{.Agent}}</span>{{end}}</div>
-        {{if .Revoked}}<p class="connection-help">This key can no longer connect to the gateway.</p>{{else}}
-        <details class="connection-disclosure key-settings" data-panel-disclosure="settings-{{.ID}}">
-          <summary>Approval settings</summary>
-          <div class="disclosure-content">
-            <form hx-post="/keys/{{.ID}}/channels" hx-target="#connect" hx-trigger="change">
-              <label for="ch-{{.ID}}">Ask for consent through</label>
-              <select class="input" id="ch-{{.ID}}" name="channels">{{$cur := .Channels}}{{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}</select>
-            </form>
-            <p class="connection-help">{{.Hint}}</p>
-          </div>
-        </details>
-        <div class="key-actions">
-          <button class="btn" type="button" hx-post="/keys/{{.ID}}/roll" hx-target="#connect" hx-confirm="Rotate {{.Name}}? A new key is created and the current key stops working immediately." aria-label="Rotate {{.Name}} key">Rotate key</button>
-          <button class="btn text-bad" type="button" hx-post="/keys/{{.ID}}/revoke" hx-target="#connect" hx-confirm="Revoke {{.Name}}? Any agent using this key stops working immediately." aria-label="Revoke {{.Name}} key">Revoke key</button>
-        </div>
-        {{end}}
-      </li>
-      {{end}}{{end}}
-      {{if not $hasKeys}}<li class="key-empty"><strong>No keys yet</strong><span>Browser sign-in works without one.</span></li>{{end}}
-    </ul>
+  <section class="connection-section connect-keys-link" aria-labelledby="connect-keys-title">
+    <h4 class="section-label" id="connect-keys-title">Need an agent key?</h4>
+    <p class="connection-help">Create and manage keys for your agents and devices on the Keys page.</p>
+    <a class="btn mt-4 w-full" href="/keys" hx-get="/keys" hx-target="#main" hx-push-url="true" data-open-keys>{{template "iconKey"}} Manage keys {{template "iconArrow"}}</a>
   </section>
-
-  {{$hasSignedIn := false}}{{range .Keys}}{{if .ViaOAuth}}{{$hasSignedIn = true}}{{end}}{{end}}
-  {{if $hasSignedIn}}
-  <section class="connection-section" aria-labelledby="signed-in-title">
-    <h4 class="section-label" id="signed-in-title">Signed-in agents</h4>
-    <p class="connection-help">Connections approved with your dashboard login.</p>
-    <ul class="key-list" aria-label="Signed-in agents">
-      {{range .Keys}}{{if .ViaOAuth}}
-      <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
-        <div class="key-card-heading"><h5>{{.Name}}</h5><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Disconnected{{else}}signed in{{end}}</span></div>
-        <p class="connection-help">{{.LastUsed}} · approved for {{.Client}}</p>
-        {{if not .Revoked}}
-        <details class="connection-disclosure key-settings" data-panel-disclosure="settings-{{.ID}}">
-          <summary>Approval settings</summary>
-          <div class="disclosure-content">
-            <form hx-post="/keys/{{.ID}}/channels" hx-target="#connect" hx-trigger="change">
-              <label for="ch-{{.ID}}">Ask for consent through</label>
-              <select class="input" id="ch-{{.ID}}" name="channels">{{$cur := .Channels}}{{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}</select>
-            </form>
-            <p class="connection-help">{{.Hint}}</p>
-          </div>
-        </details>
-        <div class="key-actions key-actions-single"><button class="btn" type="button" hx-post="/keys/{{.ID}}/revoke" hx-target="#connect" hx-confirm="Disconnect {{.Name}}? It stops working immediately and must sign in again to reconnect.">Disconnect</button></div>
-        {{end}}
-      </li>
-      {{end}}{{end}}
-    </ul>
-  </section>
-  {{end}}
 </div>
 {{end}}

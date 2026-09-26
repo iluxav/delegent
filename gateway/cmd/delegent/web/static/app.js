@@ -15,6 +15,7 @@
   let openConnectionDetails = [];
   let connectionScrollTop = 0;
   let connectionFocusID = '';
+  let keyPageState = null;
   let confirming = false;
   let targetNavObserver;
   let observedTargetNav;
@@ -43,6 +44,7 @@
     $('[data-close-panels]').hidden = !panel;
     $$('[data-panel-toggle][aria-controls]').forEach((el) => el.setAttribute('aria-expanded', String(body.classList.contains(el.dataset.panelToggle + '-open'))));
     const consent = $('.consent-dialog');
+    if (consent || !body.classList.contains('connect-open')) setClientPicker(false, false);
     $('.app-shell').inert = !!consent;
     $('.workspace').inert = !!panel;
     $('#side').inert = !!panel && panel.id !== 'side';
@@ -66,18 +68,53 @@
     if (!open && returnFocus?.isConnected && visible(returnFocus)) returnFocus.focus();
   }
 
-  function selectClient(id, focus = false) {
-    const tabs = $$('.ctab');
-    if (!tabs.some((tab) => tab.dataset.client === id)) id = tabs[0]?.dataset.client;
+  function selectClient(id) {
+    const options = $$('.client-option');
+    const selected = options.find(option => option.dataset.client === id) || options[0];
+    if (!selected) return;
+    id = selected.dataset.client;
     client = id;
-    tabs.forEach((tab) => {
-      const on = tab.dataset.client === id;
-      tab.classList.toggle('ctab-on', on);
-      tab.setAttribute('aria-selected', String(on));
-      tab.tabIndex = on ? 0 : -1;
-      if (on && focus) tab.focus();
-    });
+    options.forEach(option => option.setAttribute('aria-selected', String(option === selected)));
+    $('#client-selected-name').textContent = $('.client-option-name', selected).textContent;
+    $('[data-selected-category]').textContent = $('.client-option-category', selected).textContent;
+    const icon = $('[data-selected-icon]');
+    icon.dataset.client = id;
+    icon.replaceChildren($('.client-icon svg', selected).cloneNode(true));
     $$('.client-pane').forEach((pane) => pane.classList.toggle('hidden', pane.dataset.client !== id));
+  }
+
+  function highlightClient(option) {
+    $$('.client-option').forEach(el => el.classList.toggle('is-highlighted', el === option));
+    const search = $('#client-search');
+    if (option) {
+      search.setAttribute('aria-activedescendant', option.id);
+      option.scrollIntoView({ block: 'nearest' });
+    } else search.removeAttribute('aria-activedescendant');
+  }
+
+  function filterClients() {
+    const term = $('#client-search').value.trim().toLowerCase();
+    const options = $$('.client-option');
+    options.forEach(option => { option.hidden = !option.textContent.toLowerCase().includes(term); });
+    const matches = options.filter(option => !option.hidden);
+    $('#client-no-results').hidden = matches.length > 0;
+    highlightClient(matches.find(option => option.dataset.client === client) || matches[0]);
+  }
+
+  function setClientPicker(open, focus = true) {
+    const menu = $('#client-picker-menu');
+    if (!menu) return;
+    menu.hidden = !open;
+    $('#client-picker-trigger').setAttribute('aria-expanded', String(open));
+    $('#client-search').setAttribute('aria-expanded', String(open));
+    if (open) {
+      $('#client-search').value = '';
+      filterClients();
+      if (focus) $('#client-search').focus({ preventScroll: true });
+    } else {
+      $('#client-search').removeAttribute('aria-activedescendant');
+      if (focus) $('#client-picker-trigger').focus({ preventScroll: true });
+    }
   }
 
   function filterTools() {
@@ -162,6 +199,13 @@
       $('input[name^="scope."]', row).required = effect !== 'unknown';
     });
     const target = $('[data-target-id]')?.dataset.targetId || '';
+    const page = $('[data-page]')?.dataset.page || '';
+    $$('[data-nav]').forEach((link) => {
+      const selected = link.dataset.nav === page;
+      link.classList.toggle('is-active', selected);
+      if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
+    });
+    $('#workspace-location').textContent = target === 'new' ? 'Connect a server' : target ? ($('.target-title h2')?.textContent || 'Server') : page === 'keys' ? 'Keys' : page === 'runs' ? 'Agent runs' : 'Overview';
     $$('.server-link').forEach((link) => {
       const selected = link.dataset.server === target;
       link.classList.toggle('is-active', selected);
@@ -197,6 +241,7 @@
       $('#server-no-results').hidden = count > 0;
     }
     if (el.id === 'tool-search') filterTools();
+    if (el.id === 'client-search') filterClients();
     updateDirty(el);
   });
 
@@ -229,6 +274,18 @@
   }, true);
 
   document.addEventListener('click', async (event) => {
+    if (event.target.closest('#client-picker-trigger')) {
+      setClientPicker($('#client-picker-menu').hidden);
+      return;
+    }
+    const option = event.target.closest('.client-option');
+    if (option) {
+      selectClient(option.dataset.client);
+      remember('client', client);
+      setClientPicker(false);
+      return;
+    }
+    if (!event.target.closest('#client-picker')) setClientPicker(false, false);
     const description = event.target.closest('[data-read-description]');
     if (description) { openToolDescription(description); return; }
     const toggle = event.target.closest('[data-panel-toggle]');
@@ -239,8 +296,6 @@
       ($('#server-search') || $('.server-link'))?.focus();
       return;
     }
-    const tab = event.target.closest('.ctab');
-    if (tab) { selectClient(tab.dataset.client); remember('client', client); return; }
     $$('.target-actions details[open]').forEach((menu) => { if (!menu.contains(event.target)) menu.open = false; });
     const copy = event.target.closest('[data-copy]');
     if (copy) {
@@ -272,14 +327,35 @@
   });
 
   document.addEventListener('keydown', (event) => {
-    const tab = event.target.closest('.ctab');
-    if (tab && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+    if (event.target.id === 'client-picker-trigger' && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
       event.preventDefault();
-      const tabs = $$('.ctab');
-      const index = tabs.indexOf(tab);
-      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 }[event.key];
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + step + tabs.length) % tabs.length;
-      selectClient(tabs[next].dataset.client, true); remember('client', client);
+      setClientPicker(true);
+      return;
+    }
+    if (!$('#client-picker-menu').hidden && event.target.closest('#client-picker')) {
+      if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const options = $$('.client-option').filter(option => !option.hidden);
+        const index = options.findIndex(option => option.classList.contains('is-highlighted'));
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+        highlightClient(options[next]);
+        return;
+      }
+      if (event.key === 'Enter' && event.target.id === 'client-search') {
+        event.preventDefault();
+        const option = $('.client-option.is-highlighted');
+        if (option && !option.hidden) {
+          selectClient(option.dataset.client);
+          remember('client', client);
+          setClientPicker(false);
+        }
+        return;
+      }
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); }
+        setClientPicker(false);
+        return;
+      }
     }
     if ($('#confirm-dialog').open || $('#tool-description-dialog').open) return;
     const modal = $('.consent-dialog') || overlayPanel();
@@ -295,6 +371,10 @@
     }
   });
 
+  document.addEventListener('focusin', (event) => {
+    if (!event.target.closest('#client-picker')) setClientPicker(false, false);
+  });
+
   body.addEventListener('htmx:confirm', (event) => {
     const el = event.detail.elt;
     const form = el.closest('form');
@@ -308,26 +388,44 @@
   });
 
   body.addEventListener('htmx:beforeSwap', (event) => {
+    if (event.target.id !== 'main') return;
+    const request = event.detail.requestConfig;
+    keyPageState = $('.keys-page') && request?.verb === 'post' && /^\/keys(?:\/|$)/.test(request.path) ? {
+      details: $$('[data-key-disclosure][open]').map(el => el.dataset.keyDisclosure),
+      scroll: $('#main').scrollTop,
+      focus: document.activeElement.id,
+    } : null;
+  });
+  function rememberConnectionState(event) {
     if (event.target.id !== 'connect') return;
     openConnectionDetails = $$('#connect details[data-panel-disclosure][open]').map((el) => el.dataset.panelDisclosure);
     connectionScrollTop = $('#connect .connect-content')?.scrollTop || 0;
     connectionFocusID = $('#connect').contains(document.activeElement) ? document.activeElement.id : '';
-  });
+  }
+  body.addEventListener('htmx:beforeSwap', rememberConnectionState);
+  body.addEventListener('htmx:oobBeforeSwap', rememberConnectionState);
   body.addEventListener('htmx:afterSettle', (event) => {
-    if (event.target.id !== 'connect') return;
-    // htmx restores incoming class attributes during settling. Reapply the chosen client
-    // afterwards so its highlighted tab always matches the visible configuration.
-    selectClient(client);
-    $$('#connect details[data-panel-disclosure]').forEach((el) => { el.open = openConnectionDetails.includes(el.dataset.panelDisclosure); });
-    const minted = $('#minted');
-    if (minted) {
-      minted.closest('.minted-key').scrollIntoView({ block: 'nearest' });
-      $('[data-copy="#minted"]').focus({ preventScroll: true });
-    } else {
-      $('#connect .connect-content').scrollTop = connectionScrollTop;
-      const field = document.getElementById(connectionFocusID);
-      if (field && $('#connect').contains(field)) field.focus({ preventScroll: true });
+    // A key response also refreshes the connection panel out of band. Its pane
+    // classes settle with the main response, so restore the choice for both targets.
+    if (['main', 'connect'].includes(event.target.id)) selectClient(client);
+    if (event.target.id === 'main' && $('.keys-page')) {
+      if (keyPageState) {
+        $$('[data-key-disclosure]').forEach(el => { el.open = keyPageState.details.includes(el.dataset.keyDisclosure); });
+      }
+      if ($('#minted')) {
+        $('#minted').closest('.minted-key').scrollIntoView({ block: 'nearest' });
+        $('[data-copy="#minted"]').focus({ preventScroll: true });
+      } else if (keyPageState) {
+        $('#main').scrollTop = keyPageState.scroll;
+        document.getElementById(keyPageState.focus)?.focus({ preventScroll: true });
+      }
+      keyPageState = null;
     }
+    if (event.target.id !== 'connect') return;
+    $$('#connect details[data-panel-disclosure]').forEach((el) => { el.open = openConnectionDetails.includes(el.dataset.panelDisclosure); });
+    $('#connect .connect-content').scrollTop = connectionScrollTop;
+    const field = document.getElementById(connectionFocusID);
+    if (field && $('#connect').contains(field)) field.focus({ preventScroll: true });
   });
   body.addEventListener('htmx:afterSwap', (event) => {
     if (event.target.id === 'consentpop') {
@@ -356,6 +454,7 @@
         // A request already seen in Approvals still needs a popup after leaving the tab.
         if ($('#pkn')) $('#pkn').value = '';
         if (mobile.matches) setPanel('side', false);
+        if (event.detail.requestConfig?.elt?.closest('[data-open-keys]') || (compact.matches && $('.keys-page'))) setPanel('connect', false);
         $('#main').scrollTop = 0;
         ($('#main [autofocus]') || $('#main')).focus({ preventScroll: true });
       }
@@ -406,6 +505,6 @@
   });
   compact.addEventListener('change', () => { body.classList.remove('connect-open', 'side-open'); syncPanels(); });
   mobile.addEventListener('change', () => { body.classList.remove('side-open'); syncPanels(); });
-  if (!compact.matches && (stored('connect-open') === 'true' || (stored('connect-open') === null && innerWidth >= 1480))) body.classList.add('connect-open');
+  if (!compact.matches && stored('connect-open') === 'true') body.classList.add('connect-open');
   initialize();
 })();

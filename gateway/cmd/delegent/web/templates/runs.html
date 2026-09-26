@@ -1,9 +1,9 @@
 {{define "runsPage"}}
-<header class="target-header">
+<header class="target-header" data-page="runs">
   <div class="target-title">
     <span class="eyebrow">Runs</span>
-    <h2>What your agents are doing</h2>
-    <p class="text-ink-soft">Every task, from the request your client made to each agent it pulled in — who called whom, what was passed, and what you were asked to approve. Open one to watch it live.</p>
+    <h2>Every action. In view.</h2>
+    <p class="section-description">Follow a task from the first request to the final handoff. See what your agents do, and where your permission makes it possible.</p>
   </div>
 </header>
 <div id="runs" hx-get="/runs" hx-trigger="every 3s" hx-swap="innerHTML" hx-select="#runs > *" hx-disinherit="*">
@@ -26,16 +26,16 @@
   {{end}}
 </ul>
 {{else}}
-<div class="empty-workspace"><span class="eyebrow">Nothing yet</span><h2>No runs recorded</h2><p>As soon as a client calls a tool through the gateway, its run appears here — and every agent the call reaches after it.</p></div>
+<div class="empty-workspace runs-empty"><div class="empty-run-icon">{{template "iconActivity"}}</div><span class="eyebrow">READY WHEN YOU ARE</span><h2>No runs recorded</h2><p>As soon as a client calls a tool through the gateway, its run appears here — and every agent the call reaches after it.</p><button class="btn btn-primary mt-6" type="button" data-panel-toggle="connect">Connect an agent {{template "iconArrow"}}</button></div>
 {{end}}
 {{end}}
 
 {{define "runMissing"}}
-<div class="empty-workspace"><span class="eyebrow">Runs</span><h2>No run under {{.Root}}</h2><p>It may belong to a gateway process that has since restarted. <a class="text-button" href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true">All runs</a></p></div>
+<div class="empty-workspace" data-page="runs"><span class="eyebrow">Runs</span><h2>No run under {{.Root}}</h2><p>It may belong to a gateway process that has since restarted. <a class="text-button" href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true">All runs</a></p></div>
 {{end}}
 
 {{define "runPage"}}
-<header class="target-header">
+<header class="target-header" data-page="runs">
   <div class="target-title">
     <span class="eyebrow"><a href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true">Runs</a> / {{.Root}}</span>
     <h2>{{.Title}}</h2>

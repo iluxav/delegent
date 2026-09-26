@@ -8,7 +8,8 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body class="auth-page font-sans text-sm text-ink antialiased">
-<main class="auth-wrap"><a href="/" class="brand">{{template "brandMark"}}<span>Delegent<small>GATEWAY</small></span></a>
+<main class="auth-wrap"><a href="/" class="brand"><span class="brand-symbol">{{template "brandMark"}}</span><span>delegent<span class="brand-period">.</span><small>THE AGENT GATEWAY</small></span></a>
+<div class="auth-story"><span class="hero-kicker"><span></span>YOUR AGENTS. YOUR RULES.</span><h2>Powerful agents.<br><em>Personal boundaries.</em></h2><p>Give your agents the tools to do more.<br>Keep the authority to decide how.</p>{{template "gatewayDiagram"}}<div class="auth-principles"><span>{{template "iconShield"}}Consent-bound</span><span>{{template "iconTools"}}Precisely scoped</span><span>{{template "iconActivity"}}Always auditable</span></div></div>
 {{end}}
 
 {{define "setup"}}{{template "authShell"}}

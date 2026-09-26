@@ -1,0 +1,61 @@
+{{define "iconArrow"}}<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "iconKey"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="8" cy="9" r="5"/><path d="m11.5 12.5 8 8H22V18h-3v-3h-3l-1.5-1.5M6.5 7.5h.01" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "iconServer"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h4m-4 10h4"/></svg>{{end}}
+{{define "iconShield"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9S4 17 4 12V6l8-3Z"/><path d="m8.5 11.5 2.5 2.5 4.5-5"/></svg>{{end}}
+{{define "iconTools"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16"/></svg>{{end}}
+{{define "iconActivity"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>{{end}}
+{{define "iconGrid"}}<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/></svg>{{end}}
+{{define "gatewayDiagram"}}
+<div class="gateway-diagram" role="img" aria-label="Your agents connect through Delegent, where you control permission to access your tools.">
+  <div class="diagram-grid" aria-hidden="true"></div>
+  <div class="diagram-heading" aria-hidden="true"><span>YOUR AGENTS</span><span>YOUR TOOLS</span></div>
+  <svg class="diagram-wires" viewBox="0 0 480 240" preserveAspectRatio="none" fill="none" aria-hidden="true">
+    <path d="M102 52h43q20 0 20 20v28q0 20 20 20h55M102 120h138M102 188h43q20 0 20-20v-28q0-20 20-20h55M240 120h55q20 0 20-20V72q0-20 20-20h43M240 120h138M240 120h55q20 0 20 20v28q0 20 20 20h43" class="wire-base"/>
+    <path d="M102 120h276" class="wire-active"/>
+    <circle cx="148" cy="120" r="3" class="wire-packet"/><circle cx="336" cy="120" r="3" class="wire-packet wire-packet-second"/>
+  </svg>
+  <div class="diagram-column diagram-agents" aria-hidden="true">
+    <span class="diagram-node"><span class="agent-glyph"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20M5 5l14 14M5 19 19 5M8 3l8 18M3 8l18 8M3 16l18-8M8 21 16 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>Claude</span>
+    <span class="diagram-node"><span class="agent-glyph agent-code">&gt;_</span>Codex</span>
+    <span class="diagram-node"><span class="agent-glyph agent-custom">◇</span>Your agent</span>
+  </div>
+  <div class="diagram-core" aria-hidden="true"><div class="diagram-core-mark">{{template "brandMark"}}</div><span>DELEGENT</span><small>Permission layer</small></div>
+  <div class="diagram-column diagram-tools" aria-hidden="true">
+    <span class="diagram-node"><img src="/static/brands/notion.svg" alt="">Notion</span>
+    <span class="diagram-node"><img src="/static/brands/linear.svg" alt="">Linear</span>
+    <span class="diagram-node"><span class="diagram-tool-icon">{{template "iconTools"}}</span>Any MCP</span>
+  </div>
+  <div class="diagram-caption" aria-hidden="true"><span></span>Every request. Your permission.</div>
+</div>
+{{end}}
+
+{{define "overview"}}
+<div class="overview {{if .Targets}}is-populated{{end}}" data-page="overview">
+  <header class="overview-heading"><div><span class="eyebrow">THE BIG PICTURE</span><h1>Workspace overview</h1></div><span class="workspace-badge">{{template "iconShield"}}Your gateway, your rules</span></header>
+  <section class="overview-hero" aria-labelledby="hero-title">
+    <div class="hero-copy"><span class="hero-kicker"><span></span>CONTROL WITHOUT THE FRICTION</span><h2 id="hero-title">Let agents work.<br><em>Keep the authority.</em></h2><p>Connect your tools. Set the boundaries. Give your agents the freedom to act, with you in control.</p><div class="hero-actions"><a class="btn btn-primary" href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true">Connect a server {{template "iconArrow"}}</a><button class="btn btn-quiet" type="button" data-panel-toggle="connect">Connect an agent <span aria-hidden="true">↗</span></button></div></div>
+    {{template "gatewayDiagram"}}
+    <div class="hero-footnote"><span>{{template "iconShield"}}Consent-bound access</span><span>{{template "iconTools"}}Narrow, expiring permissions</span><span>{{template "iconActivity"}}Signed audit trail</span></div>
+  </section>
+  <section class="overview-stats" aria-label="Gateway statistics">
+    <div class="overview-stat"><div><span>Connected servers</span>{{template "iconServer"}}</div><strong>{{len .Targets}}</strong><small>Your connected tool providers</small></div>
+    <div class="overview-stat"><div><span>Discovered tools</span>{{template "iconTools"}}</div><strong>{{.Tools}}</strong><small>Managed by your policies</small></div>
+    <div class="overview-stat"><div><span>Enabled servers</span>{{template "iconActivity"}}</div><strong>{{.Enabled}}<span class="stat-dot" aria-hidden="true"></span></strong><small>Available for agent requests</small></div>
+    <div class="overview-stat {{if .Pending}}stat-attention{{end}}"><div><span>Awaiting approval</span>{{template "iconShield"}}</div><strong>{{.Pending}}</strong><small>{{if .Pending}}An agent needs your permission{{else}}Nothing waiting on you{{end}}</small></div>
+  </section>
+  <section class="overview-servers" aria-labelledby="servers-title">
+    <div class="overview-section-heading"><div><h2 id="servers-title">Your servers <span class="count">{{len .Targets}}</span></h2><p>The tools your agents can reach. The permissions you decide.</p></div><a class="text-link" href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true"><span aria-hidden="true">+</span> Add server</a></div>
+    {{if .Targets}}<div class="overview-server-grid">{{range .Targets}}
+      <a class="overview-server" href="/targets/{{.ID}}" hx-get="/targets/{{.ID}}" hx-target="#main" hx-push-url="true"><div class="overview-server-top"><span class="server-card-symbol">{{if catalogBrand .Endpoint}}<img src="/static/brands/{{catalogBrand .Endpoint}}.svg" alt="">{{else}}{{template "iconServer"}}{{end}}</span><span class="server-card-state {{if .Enabled}}is-enabled{{end}}"><span></span>{{if .Enabled}}Enabled{{else}}Disabled{{end}}</span></div><h3>{{.Name}}</h3><p title="{{.Endpoint}}">{{.Endpoint}}</p><div class="overview-server-bottom"><span>{{.Tools}} tools <span class="server-card-divider">/</span> {{if eq .Kind "a2a"}}A2A agent{{else}}MCP server{{end}}</span>{{template "iconArrow"}}</div></a>
+    {{end}}</div>{{else}}
+    <div class="servers-empty"><div class="servers-empty-symbol">{{template "iconServer"}}</div><div><h3>A home for your agent’s tools.</h3><p>Connect your first server to discover its tools and set permissions.</p><div class="empty-brands"><img src="/static/brands/notion.svg" alt="Notion"><img src="/static/brands/linear.svg" alt="Linear"><img src="/static/brands/supabase.svg" alt="Supabase"><span>Bring the tools you already use</span></div></div><a class="btn" href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true">Explore servers {{template "iconArrow"}}</a></div>
+    {{end}}
+  </section>
+  <section class="overview-guide" aria-labelledby="guide-title"><div class="overview-section-heading"><div><h2 id="guide-title">A little setup. A lot of control.</h2><p>From connected tools to confident delegation.</p></div><span class="eyebrow">HOW IT WORKS</span></div><div class="guide-grid">
+    <a class="guide-step" href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true"><span class="guide-number">01 <span></span></span><span class="guide-title">Bring your tools {{template "iconArrow"}}</span><span class="guide-description">Connect an MCP server or an A2A agent. We’ll discover what it can do.</span></a>
+    {{if .Targets}}<button class="guide-step" type="button" data-focus-servers>{{else}}<a class="guide-step" href="/targets/new" hx-get="/targets/new" hx-target="#main" hx-push-url="true">{{end}}<span class="guide-number">02 <span></span></span><span class="guide-title">Set the boundaries {{template "iconArrow"}}</span><span class="guide-description">Review each tool’s effect and choose the permissions agents can request.</span>{{if .Targets}}</button>{{else}}</a>{{end}}
+    <button class="guide-step" type="button" data-panel-toggle="connect"><span class="guide-number">03 <span></span></span><span class="guide-title">Let your agents work {{template "iconArrow"}}</span><span class="guide-description">Connect your favorite client. Approve access as your agents need it.</span></button>
+  </div></section>
+  <footer class="overview-footer"><span>{{template "iconShield"}}Your infrastructure. Your rules.</span><span>DELEGENT <span class="footer-slash">/</span> GATEWAY</span></footer>
+</div>
+{{end}}

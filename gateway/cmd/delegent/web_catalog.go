@@ -34,6 +34,16 @@ type catalogTile struct {
 	AddedAs string
 }
 
+// Match known endpoints, rather than an operator-supplied display name.
+func catalogBrand(endpoint string) string {
+	for _, server := range popularServers {
+		if server.Endpoint == endpoint {
+			return server.ID
+		}
+	}
+	return ""
+}
+
 func (w *webApp) catalogTiles(r *http.Request) []catalogTile {
 	added := map[string]string{}
 	if ts, err := w.e.st.ListTargets(r.Context()); err == nil {

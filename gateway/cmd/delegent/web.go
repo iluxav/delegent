@@ -48,9 +48,10 @@ func mountWeb(mux *http.ServeMux, e *env, reg *gateway.Registry) error {
 		return err
 	}
 	tpl, err := template.New("").Funcs(template.FuncMap{
-		"join":  strings.Join,
-		"lower": strings.ToLower,
-		"time":  evTime,
+		"join":         strings.Join,
+		"lower":        strings.ToLower,
+		"time":         evTime,
+		"catalogBrand": catalogBrand,
 	}).ParseFS(webTemplates, "web/templates/*.html")
 	if err != nil {
 		return err
@@ -94,6 +95,7 @@ func mountWeb(mux *http.ServeMux, e *env, reg *gateway.Registry) error {
 	guarded.HandleFunc("GET /runs/{id}/diagram", w.runDiagram)
 	guarded.HandleFunc("GET /runs/{id}/state", w.runState)
 	guarded.HandleFunc("GET /connect", w.connectPane)
+	guarded.HandleFunc("GET /keys", w.keysPage)
 	guarded.HandleFunc("POST /keys", w.mintKey)
 	guarded.HandleFunc("POST /keys/{id}/revoke", w.revokeKey)
 	guarded.HandleFunc("POST /keys/{id}/roll", w.rollKey)
@@ -222,5 +224,16 @@ func (w *webApp) logout(rw http.ResponseWriter, r *http.Request) {
 // --- index ---
 
 func (w *webApp) index(rw http.ResponseWriter, r *http.Request) {
-	w.page(rw, r, "", "empty", map[string]any{"Count": len(w.targetRows(r))})
+	targets := w.targetRows(r)
+	tools, enabled := 0, 0
+	for _, target := range targets {
+		tools += target.Tools
+		if target.Enabled {
+			enabled++
+		}
+	}
+	w.page(rw, r, "", "overview", map[string]any{
+		"Targets": targets, "Tools": tools, "Enabled": enabled,
+		"Pending": len(w.reg.PendingConsents(w.e.operator)),
+	})
 }

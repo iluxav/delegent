@@ -67,12 +67,12 @@
 
 {{define "newTarget"}}
 <div class="new-target" data-target-id="new">
-  <span class="eyebrow">Connect a server</span><h2>Add an MCP server</h2>
+  <span class="eyebrow">EXPAND YOUR WORKSPACE</span><h2>Your tools, connected.</h2>
   <p class="text-ink-soft">Bring your tools into Delegent. We’ll discover the server’s tools and draft a policy for you to review.</p>
   {{if .Error}}<p class="mt-4 rounded-lg bg-bad-soft px-3 py-2 text-bad" role="alert">{{.Error}}</p>{{end}}
   <div class="add-layout">
   <section class="add-custom" aria-labelledby="custom-heading">
-  <h3 id="custom-heading" class="add-heading">Custom server</h3>
+  <div class="add-section-icon">{{template "iconServer"}}</div><h3 id="custom-heading" class="add-heading">Add an MCP server</h3>
   <form hx-post="/targets" hx-target="#main" hx-indicator="#adding" hx-disabled-elt="find button[type='submit']">
     <label class="block font-medium" for="name">Server name</label><p class="text-xs text-ink-faint">Tools appear to agents as <code><span id="slug">name</span>__&lt;tool&gt;</code>.</p>
     <input class="input" id="name" name="name" value="{{.Name}}" placeholder="e.g. GitHub" required autofocus autocomplete="off">
@@ -85,7 +85,7 @@
   </form>
   </section>
   <section class="add-catalog" aria-labelledby="catalog-heading">
-  <h3 id="catalog-heading" class="add-heading">Popular servers</h3>
+  <div class="catalog-heading-row"><h3 id="catalog-heading" class="add-heading">Pick a familiar favorite</h3><span class="count">{{len .Catalog}}</span></div>
   <p class="text-xs text-ink-faint">Sign in with your account — no token needed.</p>
   <ul class="catalog-grid">
     {{range .Catalog}}<li>
