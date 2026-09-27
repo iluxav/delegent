@@ -1,4 +1,5 @@
-{{define "brandMark"}}<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M7 6h9a10 10 0 0 1 0 20H7V6Z" stroke="currentColor" stroke-width="2.5"/><path d="M3 12h12m-12 8h12m-3-12 4 4-4 4m0 0 4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "brandMark"}}<svg class="brand-mark" viewBox="0 0 16 16" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><use href="/static/brand.svg#mark"/></svg>{{end}}
+{{define "brandWordmark"}}<span class="brand-name"><span class="sr-only">Delegent</span><svg class="brand-wordmark" viewBox="0 0 47 7" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><use href="/static/brand.svg#wordmark"/></svg><small>THE AGENT GATEWAY</small></span>{{end}}
 {{define "page"}}<!doctype html>
 <html lang="en" class="h-full">
 <head>
@@ -16,11 +17,12 @@
 <a class="skip-link" href="#main">Skip to workspace</a>
 <div class="app-shell">
   <aside id="side" class="server-sidebar" aria-label="MCP servers">
-    <div class="sidebar-brand"><a class="brand" href="/" hx-get="/" hx-target="#main" hx-push-url="true"><span class="brand-symbol">{{template "brandMark"}}</span><span>delegent<span class="brand-period">.</span><small>THE AGENT GATEWAY</small></span></a><button class="btn sidebar-close" type="button" data-panel-toggle="side" aria-label="Close server navigation">×</button></div>
+    <div class="sidebar-brand"><a class="brand" href="/" hx-get="/" hx-target="#main" hx-push-url="true"><span class="brand-symbol">{{template "brandMark"}}</span>{{template "brandWordmark"}}</a><button class="btn sidebar-close" type="button" data-panel-toggle="side" aria-label="Close server navigation">×</button></div>
     <div class="sidebar-workspace"><span class="workspace-monogram">W</span><span>Personal workspace<small>Self-hosted gateway</small></span><span class="workspace-local-dot" title="Local workspace"></span></div>
     <nav class="primary-nav" aria-label="Workspace">
       <a href="/" hx-get="/" hx-target="#main" hx-push-url="true" data-nav="overview" class="nav-link">{{template "iconGrid"}}<span>Overview</span></a>
       <a href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true" data-nav="runs" class="nav-link">{{template "iconActivity"}}<span>Agent runs</span></a>
+      <a href="/relationships" hx-get="/relationships" hx-target="#main" hx-push-url="true" data-nav="relationships" class="nav-link">{{template "iconShield"}}<span>Relationships</span></a>
       <a href="/keys" hx-get="/keys" hx-target="#main" hx-push-url="true" data-nav="keys" class="nav-link">{{template "iconKey"}}<span>Keys</span></a>
     </nav>
     <div id="targets" class="flex min-h-0 flex-1 flex-col" hx-get="/targets?s={{.Selected}}" hx-trigger="targets from:body" hx-swap="innerHTML">

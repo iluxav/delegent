@@ -299,3 +299,106 @@ func TestBuildRunsGroupsAConversation(t *testing.T) {
 		t.Errorf("legacy events without a connection: %d runs, want 2", len(old))
 	}
 }
+
+// Access lives on the server and in one relationship map: the Access tab sets the callee
+// gate and the callers as edges, an agent's "what it can use" sets the caller gate and edges,
+// both applied live; an agent's own keys live on its Agent keys tab and stay off the Keys
+// page; remembered approvals are keyed by the agent, not its key.
+func TestAccessTabAndAgentKeys(t *testing.T) {
+	ts, e, logs := newDashboard(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+	ctx := context.Background()
+	e.st.PutAdapter(ctx, &store.AdapterDoc{ID: "gh", Name: "gh", Doc: []byte(`{"vendor":"gh"}`)})
+	e.st.PutTarget(ctx, &store.Target{ID: "gh", Name: "GitHub", Kind: "mcp", Endpoint: "http://gh/mcp", AdapterID: "gh", Owner: e.operator, Enabled: true})
+	e.st.PutTarget(ctx, &store.Target{ID: "planner", Name: "Planner", Kind: "a2a", Endpoint: "http://planner", AdapterID: "gh", Owner: e.operator, Enabled: true})
+	e.st.PutTarget(ctx, &store.Target{ID: "weather", Name: "Weather", Kind: "a2a", Endpoint: "http://weather", AdapterID: "gh", Owner: e.operator, Enabled: true})
+
+	_, body := get(t, c, ts.URL+"/targets/gh/access")
+	if !strings.Contains(body, "Agents and GitHub") || !strings.Contains(body, "Seen by") || !strings.Contains(body, `/targets/planner/access`) {
+		t.Fatalf("access tab lacks the lock form or the derived seen-by list:\n%s", body[:min(len(body), 800)])
+	}
+	if strings.Contains(body, "Agent keys") || strings.Contains(body, "What GitHub can use") || strings.Contains(body, `name="callers"`) {
+		t.Fatal("an MCP server has no Agent keys tab, no exposure list, and no editable callers")
+	}
+	if !strings.Contains(body, "access-graph-svg") || !strings.Contains(body, ">Planner<") || !strings.Contains(body, ">You<") {
+		t.Fatalf("reach diagram missing its boxes:\n%s", body[:min(len(body), 800)])
+	}
+	// the lock and consent mode are saved on the server
+	_, body = post(t, c, ts.URL+"/targets/gh/access", url.Values{"audience": {"humans"}, "consent": {"remember"}}, true)
+	if !strings.Contains(body, "Access saved") || !strings.Contains(body, "locked") {
+		t.Fatalf("access not saved:\n%s", body[:min(len(body), 400)])
+	}
+	gh, _ := e.st.GetTarget(ctx, "gh")
+	if gh.Audience != store.AudienceHumans || gh.Consent != store.ConsentRemember {
+		t.Fatalf("stored access = %+v", gh)
+	}
+	post(t, c, ts.URL+"/targets/gh/access", url.Values{"audience": {""}, "consent": {"remember"}}, true)
+	// the map is authored on the agent: its exposure list, with the edges as ticks
+	_, body = get(t, c, ts.URL+"/targets/planner/access")
+	if !strings.Contains(body, "What Planner can use") || !strings.Contains(body, `name="uses_targets" value="gh"`) {
+		t.Fatalf("planner's exposure list must offer gh:\n%s", body[:min(len(body), 1200)])
+	}
+	if _, body := post(t, c, ts.URL+"/targets/planner/uses", url.Values{"uses": {"listed"}, "uses_targets": {"nobody"}}, true); !strings.Contains(body, "no target") {
+		t.Fatalf("an unknown target must be refused:\n%s", body[:min(len(body), 400)])
+	}
+	post(t, c, ts.URL+"/targets/planner/uses", url.Values{"uses": {"listed"}, "uses_targets": {"gh"}}, true)
+	planner, _ := e.st.GetTarget(ctx, "planner")
+	if planner.Uses != store.UsesListed {
+		t.Fatalf("exposure not stored: %+v", planner)
+	}
+	if _, err := e.st.GetRelation(ctx, "planner", "gh"); err != nil {
+		t.Fatal("ticking gh must create the edge planner → gh")
+	}
+	gh, _ = e.st.GetTarget(ctx, "gh")
+	pk := &store.AgentKey{ID: "akey_pl", AgentTargetID: "planner"}
+	weather, _ := e.st.GetTarget(ctx, "weather")
+	if !store.Visible(ctx, e.st, pk, gh) || store.Visible(ctx, e.st, pk, weather) {
+		t.Fatal("planner must see gh (listed) and not weather (not listed)")
+	}
+	// the server's page shows the result: seen by the planner, and only it
+	if _, body := get(t, c, ts.URL+"/targets/gh/access"); !strings.Contains(body, `/targets/planner/access`) {
+		t.Fatalf("gh must list the planner under seen by:\n%s", body[:min(len(body), 800)])
+	}
+	if _, body := get(t, c, ts.URL+"/targets/weather/access"); !strings.Contains(body, "No agent sees it right now") {
+		t.Fatalf("weather is seen by nobody once the planner is listed elsewhere:\n%s", body[:min(len(body), 800)])
+	}
+	// unticking removes the edge
+	post(t, c, ts.URL+"/targets/planner/uses", url.Values{"uses": {"listed"}}, true)
+	if _, err := e.st.GetRelation(ctx, "planner", "gh"); err == nil {
+		t.Fatal("unticking must remove the edge")
+	}
+	if _, body := get(t, c, ts.URL+"/relationships"); !strings.Contains(body, "Relationships") || !strings.Contains(body, "access-graph-svg") {
+		t.Fatalf("relationships page:\n%s", body[:min(len(body), 400)])
+	}
+
+	// the agent's keys: minted on its tab, off the Keys page
+	_, body = post(t, c, ts.URL+"/targets/planner/keys", url.Values{"name": {"planner prod"}}, true)
+	if !strings.Contains(body, "new key") || !strings.Contains(body, "dgk_") {
+		t.Fatalf("agent key not minted on the agent's tab:\n%s", body[:min(len(body), 600)])
+	}
+	keys, _ := e.st.ListAgentKeys(ctx, e.operator)
+	var kid string
+	for _, k := range keys {
+		if k.AgentTargetID == "planner" {
+			kid = k.ID
+		}
+	}
+	if kid == "" {
+		t.Fatal("minted key is not issued to the planner")
+	}
+	if _, body := get(t, c, ts.URL+"/keys"); strings.Contains(body, "planner prod") {
+		t.Fatal("an agent's key must not be listed on the Keys page")
+	}
+	// remembered by the agent's id: the row names the agent, and forget takes the id
+	e.st.PutRemembered(ctx, &store.Remembered{Caller: "planner", TargetID: "gh", Scopes: []string{"repo:read"}, Reason: "test"})
+	if _, body := get(t, c, ts.URL+"/targets/gh/access"); !strings.Contains(body, "agent Planner") || !strings.Contains(body, "repo:read") {
+		t.Fatalf("remembered row missing:\n%s", body[:min(len(body), 600)])
+	}
+	post(t, c, ts.URL+"/targets/gh/remembered/planner/forget", nil, true)
+	if _, err := e.st.GetRemembered(ctx, "planner", "gh"); err == nil {
+		t.Fatal("forget did not remove the row")
+	}
+}

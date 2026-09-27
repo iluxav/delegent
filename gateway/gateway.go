@@ -46,6 +46,10 @@ import (
 // upstream MCP session, and the per-connection session map.
 type Gateway struct {
 	targetID string
+	// access is the target's consent mode (store.Target.Consent), fixed at build time — the
+	// registry rebuilds the gateway when the operator changes it. Visibility (who may call)
+	// is read live from the store's relationship map (see visibleTo).
+	access   store.Target
 	adapter  core.Adapter
 	cp       *controlplane.ControlPlane
 	br       *broker.Broker
@@ -175,6 +179,7 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 
 	g := &Gateway{
 		targetID:         target.ID,
+		access:           store.Target{ID: target.ID, Audience: target.Audience, Uses: target.Uses, Consent: target.Consent},
 		adapter:          adapter,
 		curatedSem:       curatedSem,
 		st:               st,
@@ -740,19 +745,26 @@ func (g *Gateway) callDetail(name string, args map[string]any) string {
 // ---- consent dialog (MCP elicitation) ----
 
 type elicitConsent struct {
-	ctx        context.Context
-	ss         *mcp.ServerSession
-	agent      string   // the requesting agent's chain identity ("new agent connection" pre-consent)
-	connScoped bool     // connection grant scope: tell the human the grant stays with THIS conversation
-	meta       callMeta // the WHAT/WHERE/WHY/HOW of this call, rendered as the legible headline
+	ctx         context.Context
+	ss          *mcp.ServerSession
+	agent       string   // the requesting agent's chain identity ("new agent connection" pre-consent)
+	connScoped  bool     // connection grant scope: tell the human the grant stays with THIS conversation
+	meta        callMeta // the WHAT/WHERE/WHY/HOW of this call, rendered as the legible headline
+	remembered  bool     // the human chose "always": the caller records it for this key
+	canRemember bool     // the target asks once per caller and there is a key to remember
 }
+
+const (
+	rememberOnce   = "this time"
+	rememberAlways = "always for this agent here"
+)
 
 // consentUI builds the elicitation-backed Consent for a request, naming the agent whose
 // session handle is asking (empty handle = a connection with no session yet). meta carries the
 // call's action/target/intent/effect so the dialog leads with a legible headline, not a scope.
 func (g *Gateway) consentUI(ctx context.Context, ss *mcp.ServerSession, handle string, meta callMeta) *elicitConsent {
 	name, _ := g.callerName(ctx, handle)
-	return &elicitConsent{ctx: ctx, ss: ss, agent: name, connScoped: g.grantScope == grantScopeConnection, meta: meta}
+	return &elicitConsent{ctx: ctx, ss: ss, agent: name, connScoped: g.grantScope == grantScopeConnection, meta: meta, canRemember: g.canRemember(ctx)}
 }
 
 func (e *elicitConsent) Ask(r controlplane.ConsentRequest) (*controlplane.ConsentAnswer, error) {
@@ -780,6 +792,9 @@ func (e *elicitConsent) Ask(r controlplane.ConsentRequest) (*controlplane.Consen
 	}
 	props["ttl"] = map[string]any{"type": "string", "enum": ttlLabels(), "default": ttlDefault().Label, "title": "How long?"}
 	props["budget_usd"] = map[string]any{"type": "number", "default": 1, "title": "Budget (USD)"}
+	if e.canRemember {
+		props["remember"] = map[string]any{"type": "string", "enum": []string{rememberOnce, rememberAlways}, "default": rememberOnce, "title": "Remember? \"always\" lets this key use what you grant on " + e.meta.Target + " without asking again"}
+	}
 
 	// Lead with the legible headline (action + risk + intent); demote the scope string to a
 	// footnote alongside the TTL/budget controls the human sets below.
@@ -822,6 +837,9 @@ func (e *elicitConsent) Ask(r controlplane.ConsentRequest) (*controlplane.Consen
 	budget := 1.0
 	if f, ok := res.Content["budget_usd"].(float64); ok {
 		budget = f
+	}
+	if r, ok := res.Content["remember"].(string); ok && r == rememberAlways && len(granted) > 0 {
+		e.remembered = true
 	}
 	return &controlplane.ConsentAnswer{Granted: granted, TTLMinutes: ttl, BudgetUSD: budget}, nil
 }
@@ -934,6 +952,22 @@ func (g *Gateway) guardedCall(ctx context.Context, rawConn string, elicit *mcp.S
 	// vendor call — including one that sails through under a grant already held (no prompt).
 	g.emit(g.toolCallEvent(ctx, connID, name, intent, raw))
 
+	// The relationship map: a caller that cannot see this target is refused before anything
+	// else. (It should never get here — the target is not in its tool list — so this is the
+	// backstop.)
+	if !g.visibleTo(ctx) {
+		why := "this caller is not in the audience of " + g.targetID
+		log.Printf("🔒 %s DENIED — %s", name, why)
+		denyEv := g.eventBase(ctx, connID)
+		denyEv.Type = store.EventPermissionDenied
+		denyEv.Tool = name
+		denyEv.Scopes = c.Scopes
+		denyEv.Reason = why
+		g.emit(denyEv)
+		g.cp.RecordDeny(g.principalOf(ctx), c.Scopes, why)
+		return toolError("🔒 DELEGENT: '" + name + "' — " + why + ". Tell the user; do not retry."), nil
+	}
+
 	// Authorize: forward straight through if the session already holds the scope, else open
 	// the consent dialog for exactly the scopes this call needs.
 	if handle == "" || func() bool { _, d, _ := g.br.Authorize(handle, creq); return !d.Allow }() {
@@ -963,6 +997,31 @@ func (g *Gateway) guardedCall(ctx context.Context, rawConn string, elicit *mcp.S
 			}
 		}
 
+		// No human needed: the target never asks for read/write, or a human already said
+		// "always" for this key and these scopes. A spend is always a human's number.
+		if why := g.standingGrant(ctx, c); why != "" {
+			answer := &controlplane.ConsentAnswer{Granted: c.Scopes, TTLMinutes: ttlDefault().Minutes}
+			nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), handle, c.Scopes, why, staticConsent{answer: answer}, g.lineageOf(ctx))
+			if !granted {
+				return toolError("🔒 DELEGENT: '" + name + "' — standing decision could not be applied: " + msg), nil
+			}
+			if handle == "" {
+				g.setSession(connID, nh)
+				handle = nh
+			}
+			log.Printf("✅ %s granted without asking (%s on %s: %s)", name, keyNameFromContext(ctx), g.targetID, why)
+			okEv := g.eventBase(ctx, connID)
+			okEv.Type = store.EventPermissionGranted
+			okEv.Tool = name
+			okEv.Scopes = c.Scopes
+			okEv.Reason = why
+			g.emit(okEv)
+			if _, d, _ := g.br.Authorize(handle, creq); !d.Allow {
+				return toolError("🔒 DELEGENT: '" + name + "' denied — " + d.Reason), nil
+			}
+			return g.afterGrant(ctx, connID, handle, name, args, c, amount)
+		}
+
 		// A vendor call that needs consent: record the ask before routing to a channel.
 		reqEv := g.eventBase(ctx, connID)
 		reqEv.Type = store.EventPermissionRequested
@@ -985,7 +1044,8 @@ func (g *Gateway) guardedCall(ctx context.Context, rawConn string, elicit *mcp.S
 				return g.consoleConsentBlock(ctx, connID, name, c.Scopes, meta), nil
 			}
 		}
-		nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), handle, c.Scopes, "tool: "+name, g.consentUI(ctx, elicit, handle, meta), g.lineageOf(ctx))
+		ui := g.consentUI(ctx, elicit, handle, meta)
+		nh, msg, granted := g.br.GrantUnder(g.principalOf(ctx), handle, c.Scopes, "tool: "+name, ui, g.lineageOf(ctx))
 		if !granted {
 			log.Printf("🔒 %s DENIED — %s", name, msg)
 			denyEv := g.eventBase(ctx, connID)
@@ -1010,8 +1070,16 @@ func (g *Gateway) guardedCall(ctx context.Context, rawConn string, elicit *mcp.S
 		if _, d, _ := g.br.Authorize(handle, creq); !d.Allow {
 			return toolError("🔒 DELEGENT: '" + name + "' denied — " + d.Reason), nil
 		}
+		// The human said "always": remember it for this key on this target.
+		if ui.remembered {
+			g.rememberAlways(ctx, c.Scopes, "always, from an in-chat consent for "+name)
+		}
 	}
+	return g.afterGrant(ctx, connID, handle, name, args, c, amount)
+}
 
+// afterGrant is the tail of a guarded call once authority is settled: charge a spend, forward.
+func (g *Gateway) afterGrant(ctx context.Context, connID, handle, name string, args map[string]any, c core.Classified, amount float64) (*mcp.CallToolResult, error) {
 	// Spending calls are charged atomically against the session budget — the ceiling the
 	// human set in the consent dialog, enforced so it cannot be raced past.
 	if c.Effect&core.EffectSpends != 0 {
@@ -1020,9 +1088,106 @@ func (g *Gateway) guardedCall(ctx context.Context, rawConn string, elicit *mcp.S
 			return toolError("🔒 DELEGENT: '" + name + "' refused — " + msg), nil
 		}
 	}
-
 	log.Printf("✅ %s ALLOWED (%s)", name, core.EffectNames(c.Effect))
 	return g.forward(ctx, connID, handle, name, args)
+}
+
+// standingGrant says why the classified call may run without asking a human, or "" when it
+// must ask: the target's consent mode is allow (read/write never prompt), or a human already
+// said "always" for the calling key covering these scopes. A spend always asks.
+func (g *Gateway) standingGrant(ctx context.Context, c core.Classified) string {
+	if c.Effect&core.EffectSpends != 0 {
+		return ""
+	}
+	if g.access.Consent == store.ConsentAllow {
+		return g.targetID + " never asks for this"
+	}
+	if g.remembered(ctx).Allows(c.Scopes) {
+		return "remembered: always for " + keyNameFromContext(ctx) + " on " + g.targetID
+	}
+	return ""
+}
+
+// visibleTo applies the relationship map to the calling key for this target. Auth off, or a
+// gateway with no store (unit tests), sees everything.
+func (g *Gateway) visibleTo(ctx context.Context) bool {
+	k := keyFromContext(ctx)
+	if k == nil || k.AgentTargetID == "" || g.st == nil {
+		return true
+	}
+	t, err := g.st.GetTarget(ctx, g.targetID)
+	if err != nil {
+		t = &g.access
+	}
+	return store.Visible(ctx, g.st, k, t)
+}
+
+// remembered is what a human said "always" to for the caller on this target, or nil.
+func (g *Gateway) remembered(ctx context.Context) *store.Remembered {
+	caller := rememberCallerFromContext(ctx)
+	if caller == "" || g.st == nil {
+		return nil
+	}
+	p, err := g.st.GetRemembered(ctx, caller, g.targetID)
+	if err != nil {
+		return nil
+	}
+	return p
+}
+
+// canRemember reports whether a consent ask on this call may offer "always": the target is
+// set to ask once per caller, and there is a caller to remember the answer for.
+func (g *Gateway) canRemember(ctx context.Context) bool {
+	return g.access.Consent == store.ConsentRemember && rememberCallerFromContext(ctx) != "" && g.st != nil
+}
+
+func keyNameFromContext(ctx context.Context) string {
+	_, name, _ := keyIdentityFromContext(ctx)
+	return name
+}
+
+// rememberAlways records the human's "always" for the caller on this target for scopes,
+// merged with any scopes already remembered. A caller that cannot be identified (auth off)
+// has nothing to attach it to, and the decision stays a one-off.
+func (g *Gateway) rememberAlways(ctx context.Context, scopes []string, reason string) {
+	if caller := rememberCallerFromContext(ctx); caller != "" && g.st != nil {
+		g.rememberAlwaysFor(ctx, caller, scopes, reason)
+	}
+}
+
+func (g *Gateway) rememberAlwaysFor(ctx context.Context, caller string, scopes []string, reason string) {
+	now := nowMillis()
+	p := &store.Remembered{Caller: caller, TargetID: g.targetID, Scopes: scopes, Reason: reason, CreatedAt: now, UpdatedAt: now}
+	if prev, err := g.st.GetRemembered(ctx, caller, g.targetID); err == nil {
+		p.CreatedAt = prev.CreatedAt
+		if len(prev.Scopes) == 0 {
+			p.Scopes = nil // already everything
+		} else {
+			p.Scopes = unionScopes(prev.Scopes, scopes)
+		}
+	}
+	if err := g.st.PutRemembered(ctx, p); err != nil {
+		log.Printf("[delegent] could not remember the decision for %s on %s: %v", caller, g.targetID, err)
+		return
+	}
+	log.Printf("📌 remembered: %s may always use [%s] on %s", caller, strings.Join(p.Scopes, ", "), g.targetID)
+}
+
+func unionScopes(a, b []string) []string {
+	out := append([]string{}, a...)
+	for _, s := range b {
+		found := false
+		for _, x := range out {
+			if x == s {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // forward calls the upstream vendor tool and returns its own result transparently. It is also
@@ -1435,6 +1600,10 @@ func makeVerifier(st store.Store, targetID string) auth.TokenVerifier {
 			log.Printf("[delegent] token rejected: user %s not entitled on target %s", k.UserID, targetID)
 			return nil, auth.ErrInvalidToken // valid key, but no access to this target
 		}
+		if t, err := st.GetTarget(ctx, targetID); err == nil && !store.Visible(ctx, st, k, t) {
+			log.Printf("[delegent] token rejected: key %s (%s) cannot see target %s", k.ID, k.Name, targetID)
+			return nil, auth.ErrInvalidToken
+		}
 		go func() { _ = st.TouchAgentKey(context.Background(), k.ID, nowMillis()) }()
 		return &auth.TokenInfo{
 			UserID:     k.UserID,
@@ -1456,6 +1625,7 @@ func makeVerifier(st store.Store, targetID string) auth.TokenVerifier {
 func tokenExtra(k *store.AgentKey, r *http.Request) map[string]any {
 	extra := map[string]any{
 		"user":             k.UserID,
+		"key_id":           k.ID,
 		"key_prefix":       k.Prefix,
 		"key_name":         k.Name,
 		"remote_ip":        remoteIP(r),

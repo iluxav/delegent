@@ -153,6 +153,10 @@
     <button class="btn btn-primary" name="action" value="approve" type="submit">Approve</button>
   </span>
 </div>
+{{if .CanRemember}}<label class="mt-3 flex cursor-pointer items-start gap-2.5 text-xs text-ink-soft">
+  <input type="checkbox" name="always" value="1" class="mt-0.5 size-4 accent-accent">
+  <span>Always: remember this for that caller on {{.TargetID}} — the ticked capabilities no longer ask. Listed on the server’s Access tab, where you can forget it.</span>
+</label>{{end}}
 {{end}}
 
 {{/* consentPopup is the dashboard-wide interrupt: an agent is blocked right now, so it is

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"time"
 
+	"delegent.dev/gateway"
 	"delegent.dev/gateway/agentkey"
 	"delegent.dev/gateway/id"
 	"delegent.dev/gateway/provision"
@@ -31,6 +32,11 @@ type targetRow struct {
 	Enabled        bool   `json:"enabled"`
 	CredentialKind string `json:"credential_kind"` // "" = static bearer default; "none" when credential-less
 	Tools          int    `json:"tools"`
+	// Audience/Uses/Consent are the target's gates and consent mode (see store.Target); the
+	// relationship edges themselves are under /admin/relations.
+	Audience string `json:"audience"`
+	Uses     string `json:"uses,omitempty"`
+	Consent  string `json:"consent"`
 }
 
 type targetDetail struct {
@@ -47,7 +53,8 @@ type entitlementView struct {
 }
 
 func (a *adminEnv) targetRowFor(r *http.Request, t *store.Target) targetRow {
-	row := targetRow{ID: t.ID, Name: t.Name, Kind: t.Kind, Endpoint: t.Endpoint, Enabled: t.Enabled, CredentialKind: t.CredentialKind}
+	row := targetRow{ID: t.ID, Name: t.Name, Kind: t.Kind, Endpoint: t.Endpoint, Enabled: t.Enabled, CredentialKind: t.CredentialKind,
+		Audience: t.Audience, Uses: t.Uses, Consent: t.Consent}
 	if t.CredentialRef == "" {
 		row.CredentialKind = "none"
 	}
@@ -243,6 +250,8 @@ type keyRow struct {
 	// ConsentChannels is the key's ordered consent-channel policy (empty = auto); the gateway
 	// always falls back to the console after the list.
 	ConsentChannels []string `json:"consent_channels,omitempty"`
+	// Agent is the A2A target this key was issued to, if any (see store.AgentKey.AgentTargetID).
+	Agent string `json:"agent,omitempty"`
 }
 
 // knownConsentChannels is the closed set a key policy may name — the same set the hosted
@@ -259,6 +268,165 @@ func validateChannels(channels []string) error {
 }
 
 // setKeyChannels replaces the key's consent-channel policy (empty = auto).
+// --- access: the relationship map's gates on a target, and whether callers are asked ---
+
+// putTargetAccess sets a target's lock, exposure and consent mode: {"audience": ""|"humans",
+// "uses": ""|"listed", "consent": ""|"remember"|"allow"}. The edges live under
+// /admin/relations. Live: the target's gateway and every caller's tool list rebuild.
+func (a *adminEnv) putTargetAccess(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Audience string `json:"audience"`
+		Uses     string `json:"uses"`
+		Consent  string `json:"consent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	t, err := a.e.st.GetTarget(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.notFoundOrErr(w, err)
+		return
+	}
+	if err := applyAccess(r.Context(), a.e.st, t, req.Audience, req.Uses, req.Consent); err != nil {
+		adminJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.reg.Invalidate(t.ID)
+	adminJSON(w, http.StatusOK, a.targetRowFor(r, t))
+}
+
+// applyAccess validates and stores a target's lock (audience), exposure (uses) and consent
+// mode. Uses only means something on an agent.
+func applyAccess(ctx context.Context, st store.Store, t *store.Target, audience, uses, consent string) error {
+	switch audience {
+	case store.AudienceEveryone, store.AudienceHumans:
+	default:
+		return fmt.Errorf("audience must be everyone (empty) or humans, not %q", audience)
+	}
+	switch uses {
+	case store.UsesEverything, store.UsesListed:
+	default:
+		return fmt.Errorf("uses must be everything (empty) or listed, not %q", uses)
+	}
+	if uses == store.UsesListed && t.Kind != gateway.TargetKindA2A {
+		return fmt.Errorf("%s is an MCP server; only an agent has a \"uses\" gate", t.ID)
+	}
+	switch consent {
+	case store.ConsentAsk, store.ConsentRemember, store.ConsentAllow:
+	default:
+		return fmt.Errorf("consent must be ask (empty), remember, or allow, not %q", consent)
+	}
+	t.Audience, t.Uses, t.Consent = audience, uses, consent
+	return st.PutTarget(ctx, t)
+}
+
+// setRelation adds or removes the edge agent → target of the relationship map. Both ends must
+// be registered, the agent must be an A2A target, and an agent is never related to itself.
+func setRelation(ctx context.Context, st store.Store, agent, target string, on bool) error {
+	if !on {
+		return st.DeleteRelation(ctx, agent, target)
+	}
+	if a, err := st.GetTarget(ctx, agent); err != nil || a.Kind != gateway.TargetKindA2A {
+		return fmt.Errorf("%q is not a registered agent", agent)
+	}
+	if _, err := st.GetTarget(ctx, target); err != nil {
+		return fmt.Errorf("no target %q", target)
+	}
+	if agent == target {
+		return fmt.Errorf("%s cannot be related to itself", agent)
+	}
+	return st.PutRelation(ctx, &store.Relation{Agent: agent, Target: target, CreatedAt: nowMillis()})
+}
+
+// relationRow is one edge as the admin API lists it.
+type relationRow struct {
+	Agent  string `json:"agent"`
+	Target string `json:"target"`
+}
+
+func (a *adminEnv) listRelations(w http.ResponseWriter, r *http.Request) {
+	rels, err := a.e.st.ListRelations(r.Context(), r.URL.Query().Get("agent"), r.URL.Query().Get("target"))
+	if err != nil {
+		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	rows := make([]relationRow, 0, len(rels))
+	for _, rel := range rels {
+		rows = append(rows, relationRow{Agent: rel.Agent, Target: rel.Target})
+	}
+	adminJSON(w, http.StatusOK, map[string]any{"relations": rows})
+}
+
+func (a *adminEnv) putRelation(w http.ResponseWriter, r *http.Request) {
+	agent, target := r.PathValue("agent"), r.PathValue("target")
+	if err := setRelation(r.Context(), a.e.st, agent, target, true); err != nil {
+		adminJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	a.reg.Invalidate(target)
+	adminJSON(w, http.StatusOK, relationRow{Agent: agent, Target: target})
+}
+
+func (a *adminEnv) deleteRelation(w http.ResponseWriter, r *http.Request) {
+	agent, target := r.PathValue("agent"), r.PathValue("target")
+	if err := setRelation(r.Context(), a.e.st, agent, target, false); err != nil {
+		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	a.reg.Invalidate(target)
+	adminJSON(w, http.StatusOK, map[string]any{"removed": relationRow{Agent: agent, Target: target}})
+}
+
+// rememberedRow is one remembered "always": a caller (an agent, or a person's key) and the
+// scopes it may use on the target.
+type rememberedRow struct {
+	Caller    string   `json:"caller"` // an agent's target id, or a key id
+	Name      string   `json:"name"`
+	Scopes    []string `json:"scopes,omitempty"`
+	Reason    string   `json:"reason,omitempty"`
+	UpdatedAt int64    `json:"updated_at"`
+}
+
+func (a *adminEnv) rememberedRows(ctx context.Context, targetID string) ([]rememberedRow, error) {
+	ps, err := a.e.st.ListRemembered(ctx, "", targetID)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]rememberedRow, 0, len(ps))
+	for _, p := range ps {
+		row := rememberedRow{Caller: p.Caller, Name: p.Caller, Scopes: p.Scopes, Reason: p.Reason, UpdatedAt: p.UpdatedAt}
+		if k, err := a.e.st.GetAgentKey(ctx, p.Caller); err == nil {
+			row.Name = k.Name
+		} else if t, err := a.e.st.GetTarget(ctx, p.Caller); err == nil {
+			row.Name = "agent " + t.Name
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func (a *adminEnv) listRemembered(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.e.st.GetTarget(r.Context(), r.PathValue("id")); err != nil {
+		a.notFoundOrErr(w, err)
+		return
+	}
+	rows, err := a.rememberedRows(r.Context(), r.PathValue("id"))
+	if err != nil {
+		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	adminJSON(w, http.StatusOK, map[string]any{"remembered": rows})
+}
+
+func (a *adminEnv) forgetRemembered(w http.ResponseWriter, r *http.Request) {
+	if err := a.e.st.DeleteRemembered(r.Context(), r.PathValue("caller"), r.PathValue("id")); err != nil {
+		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	adminJSON(w, http.StatusOK, map[string]any{"forgotten": r.PathValue("caller")})
+}
+
 func (a *adminEnv) setKeyChannels(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ConsentChannels []string `json:"consent_channels"`
@@ -294,13 +462,23 @@ func (a *adminEnv) listKeys(w http.ResponseWriter, r *http.Request) {
 
 func (a *adminEnv) mintKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Agent string `json:"agent"` // issue the key to this registered A2A agent
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Name == "" && req.Agent == "") {
 		adminJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
-	row, plaintext, err := a.mint(r, req.Name)
+	if req.Agent != "" {
+		if t, err := a.e.st.GetTarget(r.Context(), req.Agent); err != nil || t.Kind != gateway.TargetKindA2A {
+			adminJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("%q is not a registered agent", req.Agent)})
+			return
+		}
+		if req.Name == "" {
+			req.Name = "agent:" + req.Agent
+		}
+	}
+	row, plaintext, err := a.mintAgent(r, req.Name, req.Agent)
 	if err != nil {
 		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -331,7 +509,7 @@ func (a *adminEnv) mintKeyRow(r *http.Request, name, oauthClientID, agentTarget 
 	if err := a.e.st.PutAgentKey(r.Context(), k); err != nil {
 		return keyRow{}, "", err
 	}
-	return keyRow{ID: k.ID, Prefix: k.Prefix, Name: k.Name, CreatedAt: k.CreatedAt}, full, nil
+	return keyRow{ID: k.ID, Prefix: k.Prefix, Name: k.Name, CreatedAt: k.CreatedAt, Agent: k.AgentTargetID}, full, nil
 }
 
 func (a *adminEnv) revokeKey(w http.ResponseWriter, r *http.Request) {

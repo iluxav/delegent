@@ -28,10 +28,14 @@ func cmdTarget(args []string) error {
 		return targetList(args[1:])
 	case "enable":
 		return targetSetEnabled(args[1:], true)
+	case "access":
+		return targetAccess(args[1:])
+	case "remembered":
+		return targetRemembered(args[1:])
 	case "disable":
 		return targetSetEnabled(args[1:], false)
 	default:
-		return fmt.Errorf("unknown target subcommand %q (want add|list|enable|disable)", args[0])
+		return fmt.Errorf("unknown target subcommand %q (want add|list|enable|disable|access|remembered)", args[0])
 	}
 }
 
@@ -192,4 +196,249 @@ func targetSetEnabled(args []string, enabled bool) error {
 	}
 	fmt.Printf("target %s %sd — restart serve to apply\n", t.ID, verb)
 	return nil
+}
+
+// targetAccess shows or sets a target's gates and consent mode:
+//
+//	delegent target access <id>
+//	delegent target access <id> --audience any|none|listed --uses everything|listed --consent ask|remember|allow
+//
+// The edges the "listed" gates read are managed with 'delegent relation'.
+func targetAccess(args []string) error {
+	fs := flag.NewFlagSet("target access", flag.ExitOnError)
+	home := homeFlag(fs)
+	audience := fs.String("audience", "", "the lock: any (default — agents may use it, each per its own --uses) or none (no agent, only your own clients)")
+	uses := fs.String("uses", "", "agents only — what it may reach: everything (default) or listed (only targets it is related to)")
+	consent := fs.String("consent", "", "how a permitted caller is asked: ask (every time, default), remember (ask once per caller; \"always\" is offered), allow (never for read/write)")
+	if err := parseAround(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: delegent target access <id> [--audience …] [--uses …] [--consent …]")
+	}
+	ctx := context.Background()
+	e, err := openEnv(ctx, *home)
+	if err != nil {
+		return err
+	}
+	t, err := e.st.GetTarget(ctx, fs.Arg(0))
+	if err != nil {
+		return fmt.Errorf("no target %q", fs.Arg(0))
+	}
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name != "home" {
+			set = true
+		}
+	})
+	if set {
+		aud, use, con := t.Audience, t.Uses, t.Consent
+		if *audience != "" {
+			v, ok := map[string]string{"any": store.AudienceEveryone, "everyone": store.AudienceEveryone, "none": store.AudienceHumans, "humans": store.AudienceHumans}[*audience]
+			if !ok {
+				return fmt.Errorf("--audience must be any or none")
+			}
+			aud = v
+		}
+		if *uses != "" {
+			v, ok := map[string]string{"everything": store.UsesEverything, "listed": store.UsesListed}[*uses]
+			if !ok {
+				return fmt.Errorf("--uses must be everything or listed")
+			}
+			use = v
+		}
+		if *consent != "" {
+			v, ok := map[string]string{"ask": store.ConsentAsk, "remember": store.ConsentRemember, "allow": store.ConsentAllow}[*consent]
+			if !ok {
+				return fmt.Errorf("--consent must be ask, remember, or allow")
+			}
+			con = v
+		}
+		if err := applyAccess(ctx, e.st, t, aud, use, con); err != nil {
+			return err
+		}
+		fmt.Println("saved — restart serve to apply (the dashboard applies it live)")
+	}
+	usesRels, _ := e.st.ListRelations(ctx, t.ID, "")
+	fmt.Printf("%s\n  agents: %s\n", t.ID, audienceLabel(t, seenBy(ctx, e.st, t)))
+	if t.Kind == "a2a" {
+		fmt.Printf("  what it can use: %s\n", usesLabel(t, usesRels))
+	}
+	fmt.Printf("  when to ask: %s\n", consentLabel(t.Consent))
+	return nil
+}
+
+func audienceLabel(t *store.Target, sees []string) string {
+	if t.Audience == store.AudienceHumans {
+		return "locked — no agent (your own clients only)"
+	}
+	if len(sees) == 0 {
+		return "may use it; none sees it yet"
+	}
+	return "may use it; seen by " + strings.Join(sees, ", ")
+}
+
+// seenBy lists the enabled agents that currently see t — the map read from the callee's side.
+func seenBy(ctx context.Context, st store.Store, t *store.Target) []string {
+	ts, _ := st.ListTargets(ctx)
+	var out []string
+	for _, a := range ts {
+		if a.Kind == "a2a" && a.Enabled && a.ID != t.ID && store.Visible(ctx, st, &store.AgentKey{ID: "k", AgentTargetID: a.ID}, t) {
+			out = append(out, a.ID)
+		}
+	}
+	return out
+}
+
+func usesLabel(t *store.Target, rels []*store.Relation) string {
+	if t.Uses != store.UsesListed {
+		return "everything its callees admit it to"
+	}
+	var ids []string
+	for _, r := range rels {
+		ids = append(ids, r.Target)
+	}
+	if len(ids) == 0 {
+		return "only related targets: (none yet — 'delegent relation add " + t.ID + " <target>')"
+	}
+	return "only related targets: " + strings.Join(ids, ", ")
+}
+
+func consentLabel(mode string) string {
+	switch mode {
+	case store.ConsentRemember:
+		return "ask once per caller, then remember"
+	case store.ConsentAllow:
+		return "never ask for read/write (a spend always asks)"
+	}
+	return "ask every time"
+}
+
+// targetRemembered lists the "always" decisions on a target, or forgets one:
+//
+//	delegent target remembered <id> [--forget <agent-or-key-id>]
+func targetRemembered(args []string) error {
+	fs := flag.NewFlagSet("target remembered", flag.ExitOnError)
+	home := homeFlag(fs)
+	forget := fs.String("forget", "", "caller (agent id, or a person's key id) whose remembered decision to drop")
+	if err := parseAround(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: delegent target remembered <id> [--forget <caller>]")
+	}
+	ctx := context.Background()
+	e, err := openEnv(ctx, *home)
+	if err != nil {
+		return err
+	}
+	if _, err := e.st.GetTarget(ctx, fs.Arg(0)); err != nil {
+		return fmt.Errorf("no target %q", fs.Arg(0))
+	}
+	if *forget != "" {
+		if err := e.st.DeleteRemembered(ctx, *forget, fs.Arg(0)); err != nil {
+			return err
+		}
+		fmt.Printf("forgotten: %s on %s — it asks again\n", *forget, fs.Arg(0))
+		return nil
+	}
+	ps, err := e.st.ListRemembered(ctx, "", fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if len(ps) == 0 {
+		fmt.Printf("%s: nothing remembered — every caller asks\n", fs.Arg(0))
+		return nil
+	}
+	for _, p := range ps {
+		name := p.Caller
+		if k, err := e.st.GetAgentKey(ctx, p.Caller); err == nil {
+			name = k.Name + " (" + k.ID + ")"
+		} else if t, err := e.st.GetTarget(ctx, p.Caller); err == nil {
+			name = "agent " + t.ID
+		}
+		sc := "every scope"
+		if len(p.Scopes) > 0 {
+			sc = strings.Join(p.Scopes, ", ")
+		}
+		fmt.Printf("%-40s %-30s %s\n", name, sc, p.Reason)
+	}
+	return nil
+}
+
+// cmdRelation manages the relationship map — the edges "agent may use target" that the
+// listed gates read:
+//
+//	delegent relation list [<agent>]
+//	delegent relation add <agent> <target>
+//	delegent relation rm <agent> <target>
+func cmdRelation(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: delegent relation list|add|rm …")
+	}
+	fs := flag.NewFlagSet("relation "+args[0], flag.ExitOnError)
+	home := homeFlag(fs)
+	if err := parseAround(fs, args[1:]); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	e, err := openEnv(ctx, *home)
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		rels, err := e.st.ListRelations(ctx, fs.Arg(0), "")
+		if err != nil {
+			return err
+		}
+		if len(rels) == 0 {
+			fmt.Println("no relations — every agent sees what its callees admit it to")
+			return nil
+		}
+		for _, r := range rels {
+			fmt.Printf("%s → %s\n", r.Agent, r.Target)
+		}
+		return nil
+	case "add", "rm":
+		if fs.NArg() != 2 {
+			return fmt.Errorf("usage: delegent relation %s <agent> <target>", args[0])
+		}
+		if err := setRelation(ctx, e.st, fs.Arg(0), fs.Arg(1), args[0] == "add"); err != nil {
+			return err
+		}
+		if args[0] == "add" {
+			fmt.Printf("%s → %s — restart serve to apply (the dashboard applies it live)\n", fs.Arg(0), fs.Arg(1))
+		} else {
+			fmt.Printf("removed %s → %s — restart serve to apply\n", fs.Arg(0), fs.Arg(1))
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown relation subcommand %q (want list|add|rm)", args[0])
+	}
+}
+
+// parseAround parses flags that may come before, between or after positional arguments, so
+// "target access librarian --consent remember" reads as naturally as the flags-first form.
+func parseAround(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	// flags after the positionals: re-parse the tail, then put the positionals back
+	var pos []string
+	for fs.NArg() > 0 {
+		rest := fs.Args()
+		i := 0
+		for i < len(rest) && !strings.HasPrefix(rest[i], "-") {
+			pos = append(pos, rest[i])
+			i++
+		}
+		if i == len(rest) {
+			break
+		}
+		if err := fs.Parse(rest[i:]); err != nil {
+			return err
+		}
+	}
+	return fs.Parse(pos)
 }

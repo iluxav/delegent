@@ -219,7 +219,8 @@ func (w *webApp) resolveConsent(rw http.ResponseWriter, r *http.Request) {
 	ttl, _ := strconv.Atoi(r.FormValue("ttl"))
 	budget, _ := strconv.ParseFloat(r.FormValue("budget"), 64)
 
-	ok, err := w.reg.ResolveConsent(w.e.operator, askID, granted, ttl, budget)
+	always := approve && r.FormValue("always") == "1"
+	ok, err := w.reg.ResolveConsentAlways(w.e.operator, askID, granted, ttl, budget, always)
 	if popup {
 		live, sig := w.allLive(askID)
 		pv := &targetView{Live: live, ConsentSig: sig}
@@ -237,6 +238,8 @@ func (w *webApp) resolveConsent(rw http.ResponseWriter, r *http.Request) {
 		v.Error = err.Error()
 	case !ok:
 		v.Error = "That ask is no longer live — it expired, was already decided, or the agent gave up. It will re-ask on its next call."
+	case approve && always:
+		v.Notice = fmt.Sprintf("Approved %s for %d minutes, and remembered it for that caller here.", strings.Join(granted, ", "), ttl)
 	case approve:
 		v.Notice = fmt.Sprintf("Approved %s for %d minutes.", strings.Join(granted, ", "), ttl)
 	default:

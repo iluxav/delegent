@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -34,6 +35,8 @@ type MemStore struct {
 	channelTokens   map[string]*ChannelLinkToken  // keyed by token
 	channelSettings map[string]*ChannelSetting    // keyed by kind
 	agentKeys       map[string]*AgentKey          // keyed by key ID
+	remembered      map[string]*Remembered        // keyed by caller|targetID
+	relations       map[string]*Relation          // keyed by agent|target
 	secrets         map[string][]byte             // keyed by ref; opaque sealed bytes
 }
 
@@ -55,6 +58,8 @@ func NewMemStore() *MemStore {
 		channelTokens:   map[string]*ChannelLinkToken{},
 		channelSettings: map[string]*ChannelSetting{},
 		agentKeys:       map[string]*AgentKey{},
+		remembered:      map[string]*Remembered{},
+		relations:       map[string]*Relation{},
 		secrets:         map[string][]byte{},
 	}
 }
@@ -74,6 +79,110 @@ func (m *MemStore) SetAgentKeyConsentChannels(_ context.Context, id string, chan
 		return ErrNotFound
 	}
 	k.ConsentChannels = append([]string(nil), channels...)
+	return nil
+}
+
+func policyKey(keyID, targetID string) string { return keyID + "|" + targetID }
+
+func cloneRemembered(p *Remembered) *Remembered {
+	cp := *p
+	cp.Scopes = append([]string(nil), p.Scopes...)
+	return &cp
+}
+
+func (m *MemStore) PutRemembered(_ context.Context, p *Remembered) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.Caller == "" || p.TargetID == "" {
+		return errors.New("store: a remembered decision needs a caller and a target")
+	}
+	m.remembered[policyKey(p.Caller, p.TargetID)] = cloneRemembered(p)
+	return nil
+}
+
+func (m *MemStore) GetRemembered(_ context.Context, caller, targetID string) (*Remembered, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.remembered[policyKey(caller, targetID)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return cloneRemembered(p), nil
+}
+
+func (m *MemStore) ListRemembered(_ context.Context, caller, targetID string) ([]*Remembered, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*Remembered
+	for _, p := range m.remembered {
+		if (caller == "" || p.Caller == caller) && (targetID == "" || p.TargetID == targetID) {
+			out = append(out, cloneRemembered(p))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Caller != out[j].Caller {
+			return out[i].Caller < out[j].Caller
+		}
+		return out[i].TargetID < out[j].TargetID
+	})
+	return out, nil
+}
+
+func (m *MemStore) DeleteRemembered(_ context.Context, caller, targetID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.remembered, policyKey(caller, targetID))
+	return nil
+}
+
+func (m *MemStore) PutRelation(_ context.Context, rel *Relation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rel.Agent == "" || rel.Target == "" {
+		return errors.New("store: a relation needs an agent and a target")
+	}
+	if rel.Agent == rel.Target {
+		return errors.New("store: an agent cannot be related to itself")
+	}
+	cp := *rel
+	m.relations[policyKey(rel.Agent, rel.Target)] = &cp
+	return nil
+}
+
+func (m *MemStore) GetRelation(_ context.Context, agent, target string) (*Relation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rel, ok := m.relations[policyKey(agent, target)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *rel
+	return &cp, nil
+}
+
+func (m *MemStore) ListRelations(_ context.Context, agent, target string) ([]*Relation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*Relation
+	for _, rel := range m.relations {
+		if (agent == "" || rel.Agent == agent) && (target == "" || rel.Target == target) {
+			cp := *rel
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Agent != out[j].Agent {
+			return out[i].Agent < out[j].Agent
+		}
+		return out[i].Target < out[j].Target
+	})
+	return out, nil
+}
+
+func (m *MemStore) DeleteRelation(_ context.Context, agent, target string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.relations, policyKey(agent, target))
 	return nil
 }
 

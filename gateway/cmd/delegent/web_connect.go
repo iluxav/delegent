@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"delegent.dev/gateway"
+	"delegent.dev/gateway/store"
 )
 
 // hermesYAML renders a Hermes config.yaml mcp_servers entry: the transport (url, or command
@@ -71,7 +71,8 @@ type keyView struct {
 	ViaOAuth bool
 	Client   string
 	// Agent names the A2A target this key was issued to (the key that agent uses when it calls
-	// other targets through the gateway); empty for a person's harness.
+	// other targets through the gateway); empty for a person's harness. Such keys live on the
+	// agent's page, not the Keys page.
 	Agent string
 }
 
@@ -103,16 +104,17 @@ type snippet struct {
 }
 
 type connectView struct {
-	Presets  []channelPreset
-	Keys     []keyView
-	Snippets []snippet
-	Minted   string // plaintext of a key just minted or rolled — shown exactly once
-	MintName string
-	// Agents lists the registered A2A targets, so a key can be issued to one of them.
-	Agents      []string
-	Notice      string
-	Error       string
-	Placeholder bool // the snippets carry the placeholder, not a real key
+	ActiveKeys   int
+	RevokedKeys  int
+	SignedInKeys int
+	Presets      []channelPreset
+	Keys         []keyView
+	Snippets     []snippet
+	Minted       string // plaintext of a key just minted or rolled — shown exactly once
+	MintName     string
+	Notice       string
+	Error        string
+	Placeholder  bool // the snippets carry the placeholder, not a real key
 }
 
 // --- snippet shapes, one struct per client family so field ORDER is what you would type ---
@@ -305,21 +307,27 @@ func (w *webApp) connectView(r *http.Request, plaintext string) connectView {
 	}
 	v.Presets = channelPresets()
 	for _, k := range keys {
+		if k.AgentTargetID != "" {
+			continue // an agent's own key: managed on that agent's page
+		}
+		if k.OAuthClientID != "" {
+			if k.RevokedAt == 0 {
+				v.SignedInKeys++
+			}
+		} else if k.RevokedAt != 0 {
+			v.RevokedKeys++
+		} else {
+			v.ActiveKeys++
+		}
 		v.Keys = append(v.Keys, keyView{
 			ID: k.ID, Name: k.Name, Prefix: k.Prefix, Revoked: k.RevokedAt != 0, LastUsed: lastUsed(k.LastUsedAt),
 			Channels: strings.Join(k.ConsentChannels, ","), Hint: presetHint(k.ConsentChannels),
 			ViaOAuth: k.OAuthClientID != "", Client: w.clientName(k.OAuthClientID),
-			Agent: k.AgentTargetID,
 		})
 	}
-	if ts, err := w.e.st.ListTargets(r.Context()); err == nil {
-		for _, t := range ts {
-			if t.Kind == gateway.TargetKindA2A {
-				v.Agents = append(v.Agents, t.ID)
-			}
-		}
-		sort.Strings(v.Agents)
-	}
+	sort.SliceStable(v.Keys, func(i, j int) bool {
+		return !v.Keys[i].Revoked && v.Keys[j].Revoked
+	})
 	return v
 }
 
@@ -371,19 +379,6 @@ func (w *webApp) renderKeys(rw http.ResponseWriter, r *http.Request, v connectVi
 
 func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
-	agent := strings.TrimSpace(r.FormValue("agent"))
-	if agent != "" {
-		// Issued to an agent: it must be a registered A2A target; the name defaults to it.
-		if t, err := w.e.st.GetTarget(r.Context(), agent); err != nil || t.Kind != gateway.TargetKindA2A {
-			v := w.connectView(r, "")
-			v.Error = fmt.Sprintf("%q is not a registered agent", agent)
-			w.renderKeys(rw, r, v)
-			return
-		}
-		if name == "" {
-			name = "agent:" + agent
-		}
-	}
 	if name == "" {
 		v := w.connectView(r, "")
 		v.Error = "give the key a name — events and rolls are tracked by it"
@@ -391,7 +386,7 @@ func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := &adminEnv{e: w.e, reg: w.reg}
-	row, plaintext, err := a.mintAgent(r, name, agent)
+	row, plaintext, err := a.mint(r, name)
 	if err != nil {
 		v := w.connectView(r, "")
 		v.Error = err.Error()
@@ -403,16 +398,28 @@ func (w *webApp) mintKey(rw http.ResponseWriter, r *http.Request) {
 	w.renderKeys(rw, r, v)
 }
 
+// keyChanged renders the page a key change belongs on: the Keys page for a person's key, or
+// the agent's own Keys tab for a key issued to an agent. plaintext is a freshly minted key.
+func (w *webApp) keyChanged(rw http.ResponseWriter, r *http.Request, k *store.AgentKey, plaintext, notice, errMsg string) {
+	if k != nil && k.AgentTargetID != "" {
+		if v, _, err := w.loadTarget(r, k.AgentTargetID); err == nil {
+			v.Tab, v.Minted, v.Notice, v.Error = "keys", plaintext, notice, errMsg
+			w.page(rw, r, v.T.ID, "target", v)
+			return
+		}
+	}
+	v := w.connectView(r, plaintext)
+	v.Notice, v.Error = notice, errMsg
+	w.renderKeys(rw, r, v)
+}
+
 func (w *webApp) revokeKey(rw http.ResponseWriter, r *http.Request) {
+	k, _ := w.e.st.GetAgentKey(r.Context(), r.PathValue("id"))
 	if err := w.e.st.RevokeAgentKey(r.Context(), r.PathValue("id"), nowMillis()); err != nil {
-		v := w.connectView(r, "")
-		v.Error = err.Error()
-		w.renderKeys(rw, r, v)
+		w.keyChanged(rw, r, k, "", "", err.Error())
 		return
 	}
-	v := w.connectView(r, "")
-	v.Notice = "Key revoked. An agent holding it is refused at its next connection."
-	w.renderKeys(rw, r, v)
+	w.keyChanged(rw, r, k, "", "Key revoked. An agent holding it is refused at its next connection.", "")
 }
 
 // rollKey mints a replacement under the same name, then revokes the old one — mint first, so
@@ -427,22 +434,16 @@ func (w *webApp) rollKey(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := &adminEnv{e: w.e, reg: w.reg}
-	row, plaintext, err := a.mint(r, old.Name)
+	row, plaintext, err := a.mintAgent(r, old.Name, old.AgentTargetID)
 	if err != nil {
-		v := w.connectView(r, "")
-		v.Error = err.Error()
-		w.renderKeys(rw, r, v)
+		w.keyChanged(rw, r, old, "", "", err.Error())
 		return
 	}
 	if err := w.e.st.RevokeAgentKey(ctx, old.ID, nowMillis()); err != nil {
-		v := w.connectView(r, plaintext)
-		v.Error = fmt.Sprintf("new key minted (%s) but revoking the old one failed: %v", row.Prefix, err)
-		w.renderKeys(rw, r, v)
+		w.keyChanged(rw, r, old, plaintext, "", fmt.Sprintf("new key minted (%s) but revoking the old one failed: %v", row.Prefix, err))
 		return
 	}
-	v := w.connectView(r, plaintext)
-	v.Notice = fmt.Sprintf("Rolled %q — the old key is revoked. Copy the new one now.", old.Name)
-	w.renderKeys(rw, r, v)
+	w.keyChanged(rw, r, old, plaintext, fmt.Sprintf("Rolled %q — the old key is revoked. Copy the new one now.", old.Name), "")
 }
 
 // setKeyChannels stores which channel this key's agent is asked through. The console is always
@@ -457,21 +458,16 @@ func (w *webApp) setKeyChannels(rw http.ResponseWriter, r *http.Request) {
 	if raw != "" {
 		channels = strings.Split(raw, ",")
 	}
+	k, _ := w.e.st.GetAgentKey(r.Context(), r.PathValue("id"))
 	if err := validateChannels(channels); err != nil {
-		v := w.connectView(r, "")
-		v.Error = err.Error()
-		w.renderKeys(rw, r, v)
+		w.keyChanged(rw, r, k, "", "", err.Error())
 		return
 	}
 	if err := w.e.st.SetAgentKeyConsentChannels(r.Context(), r.PathValue("id"), channels); err != nil {
-		v := w.connectView(r, "")
-		v.Error = err.Error()
-		w.renderKeys(rw, r, v)
+		w.keyChanged(rw, r, k, "", "", err.Error())
 		return
 	}
-	v := w.connectView(r, "")
-	v.Notice = "Consent channel set to " + presetLabel(channels) + ". It applies the next time that agent connects."
-	w.renderKeys(rw, r, v)
+	w.keyChanged(rw, r, k, "", "Consent channel set to "+presetLabel(channels)+". It applies the next time that agent connects.", "")
 }
 
 // clientName resolves a registered agent's display name, falling back to the id if the

@@ -1,6 +1,11 @@
 {{define "keysPage"}}
-<div class="keys-page" data-page="keys">
-  <header class="keys-heading"><div><span class="eyebrow">ACCESS MANAGEMENT</span><h1>Agent keys</h1><p>Give each agent its own way in. Manage access, rotate credentials, and choose how it asks for permission.</p></div><span class="keys-heading-icon">{{template "iconKey"}}</span></header>
+<div class="workspace-page keys-page" data-page="keys">
+  <header class="page-heading"><div><span class="eyebrow">CLIENT ACCESS</span><h1>Keys</h1><p>Manage credentials for the clients and devices you use. Each key has its own name, history, and approval preferences.</p></div><span class="page-icon">{{template "iconKey"}}</span></header>
+  <dl class="page-metrics">
+    <div><dt>Active keys</dt><dd>{{.ActiveKeys}}<span>ready to connect</span></dd></div>
+    <div><dt>Browser sign-ins</dt><dd>{{.SignedInKeys}}<span>connected clients</span></dd></div>
+    <div><dt>Revoked keys</dt><dd>{{.RevokedKeys}}<span>access removed</span></dd></div>
+  </dl>
   {{if and .Notice (not .Minted)}}<p class="connection-notice bg-ok-soft text-ok" role="status">{{.Notice}}</p>{{end}}
   {{if .Error}}<p class="connection-notice bg-bad-soft text-bad" role="alert">{{.Error}}</p>{{end}}
   {{if .Minted}}
@@ -12,36 +17,22 @@
   </section>
   {{end}}
   <div class="keys-layout">
-    <section class="key-create-card" aria-labelledby="create-key-title">
-      <span class="eyebrow">A KEY FOR EVERY AGENT</span><h2 id="create-key-title">Create a key</h2>
-      <p class="connection-help">For clients that use a key instead of browser sign-in. Use a separate key for each agent or device.</p>
-      <form method="post" action="/keys" hx-post="/keys" hx-target="#main" hx-disabled-elt="find button" class="key-create-form">
-        <label for="agent-key-name">Key name</label>
-        <input class="input" id="agent-key-name" name="name" value="{{.MintName}}" placeholder="e.g. work laptop" autocomplete="off">
-        {{if .Agents}}
-        <label class="mt-5" for="agent-key-agent">Issued to an agent <span class="text-ink-faint">· optional</span></label>
-        <select class="input" id="agent-key-agent" name="agent"><option value="">A person’s client</option>{{range .Agents}}<option value="{{.}}">{{.}}</option>{{end}}</select>
-        <p class="connection-help">Identify calls from a registered A2A agent and link them to the task it passes through <code>X-Delegent-Session</code>.</p>
-        {{end}}
-        <button class="btn btn-primary w-full mt-5" type="submit">{{template "iconKey"}} Create key</button>
-      </form>
-      <p class="key-create-note">{{template "iconShield"}}Keys are shown once. Copy yours after creating it.</p>
-    </section>
     <div class="keys-management">
       <section aria-labelledby="your-keys-title">
-        <div class="keys-section-heading"><h2 id="your-keys-title">Your keys</h2><span class="eyebrow">AGENTS &amp; DEVICES</span></div>
+        <div class="keys-section-heading"><h2 id="your-keys-title">Your keys</h2><span class="section-meta">CLIENTS &amp; DEVICES</span></div>
         <ul class="key-list" aria-label="Agent keys">
           {{$hasKeys := false}}
           {{range .Keys}}{{if not .ViaOAuth}}{{$hasKeys = true}}
           <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
-            <div class="key-card-heading"><h3>{{.Name}}</h3><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Revoked{{else}}Active{{end}}</span></div>
-            <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span>{{if .Agent}}<span class="pill bg-panel text-ink-soft">agent · {{.Agent}}</span>{{end}}</div>
+            <div class="key-card-heading"><span class="credential-icon">{{template "iconKey"}}</span><h3>{{.Name}}</h3><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Revoked{{else}}Active{{end}}</span></div>
+            <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span></div>
             {{if .Revoked}}<p class="connection-help">This key can no longer connect to the gateway.</p>{{else}}
+            <div class="key-card-controls">
             <details class="connection-disclosure key-settings" data-key-disclosure="settings-{{.ID}}">
-              <summary>Approval settings</summary>
+              <summary>Where approvals appear</summary>
               <div class="disclosure-content">
                 <form hx-post="/keys/{{.ID}}/channels" hx-target="#main" hx-trigger="change">
-                  <label for="ch-{{.ID}}">Ask for consent through</label>
+                  <label for="ch-{{.ID}}">Approvals appear in</label>
                   <select class="input" id="ch-{{.ID}}" name="channels">{{$cur := .Channels}}{{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}</select>
                 </form>
                 <p class="connection-help">{{.Hint}}</p>
@@ -51,28 +42,29 @@
               <button class="btn" type="button" hx-post="/keys/{{.ID}}/roll" hx-target="#main" hx-confirm="Rotate {{.Name}}? A new key is created and the current key stops working immediately." aria-label="Rotate {{.Name}} key">Rotate key</button>
               <button class="btn text-bad" type="button" hx-post="/keys/{{.ID}}/revoke" hx-target="#main" hx-confirm="Revoke {{.Name}}? Any agent using this key stops working immediately." aria-label="Revoke {{.Name}} key">Revoke key</button>
             </div>
+            </div>
             {{end}}
           </li>
           {{end}}{{end}}
-          {{if not $hasKeys}}<li class="keys-empty"><span>{{template "iconKey"}}</span><h3>No keys yet</h3><p>Create your first key to connect an agent or device.<br>Clients that use browser sign-in don’t need one.</p></li>{{end}}
+          {{if not $hasKeys}}<li class="keys-empty"><span>{{template "iconKey"}}</span><h3>No keys yet</h3><p>Create a key for your first client or device.<br>Clients that use browser sign-in don’t need one.</p></li>{{end}}
         </ul>
       </section>
       {{$hasSignedIn := false}}{{range .Keys}}{{if .ViaOAuth}}{{$hasSignedIn = true}}{{end}}{{end}}
       {{if $hasSignedIn}}
       <section class="signed-in-section" aria-labelledby="signed-in-title">
-        <div class="keys-section-heading"><h2 id="signed-in-title">Signed-in agents</h2><span class="eyebrow">BROWSER SIGN-IN</span></div>
+        <div class="keys-section-heading"><h2 id="signed-in-title">Browser sign-ins</h2><span class="section-meta">NO KEY REQUIRED</span></div>
         <p class="connection-help">Connections approved with your dashboard login.</p>
         <ul class="key-list" aria-label="Signed-in agents">
           {{range .Keys}}{{if .ViaOAuth}}
           <li class="key-card {{if .Revoked}}key-card-revoked{{end}}">
-            <div class="key-card-heading"><h3>{{.Name}}</h3><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Disconnected{{else}}signed in{{end}}</span></div>
+            <div class="key-card-heading"><span class="credential-icon">{{template "iconKey"}}</span><h3>{{.Name}}</h3><span class="key-status {{if .Revoked}}is-revoked{{end}}">{{if .Revoked}}Disconnected{{else}}signed in{{end}}</span></div>
             <p class="connection-help">{{.LastUsed}} · approved for {{.Client}}</p>
             {{if not .Revoked}}
             <details class="connection-disclosure key-settings" data-key-disclosure="settings-{{.ID}}">
-              <summary>Approval settings</summary>
+              <summary>Where approvals appear</summary>
               <div class="disclosure-content">
                 <form hx-post="/keys/{{.ID}}/channels" hx-target="#main" hx-trigger="change">
-                  <label for="ch-{{.ID}}">Ask for consent through</label>
+                  <label for="ch-{{.ID}}">Approvals appear in</label>
                   <select class="input" id="ch-{{.ID}}" name="channels">{{$cur := .Channels}}{{range $.Presets}}<option value="{{.Value}}" {{if eq .Value $cur}}selected{{end}}>{{.Label}}</option>{{end}}</select>
                 </form>
                 <p class="connection-help">{{.Hint}}</p>
@@ -86,6 +78,17 @@
       </section>
       {{end}}
     </div>
+    <aside class="key-create-card" aria-labelledby="create-key-title">
+      <span class="create-key-icon">{{template "iconKey"}}</span><h2 id="create-key-title">Create a key</h2>
+      <p class="connection-help">Give each client or device its own key so you can manage its access independently.</p>
+      <form method="post" action="/keys" hx-post="/keys" hx-target="#main" hx-disabled-elt="find button" class="key-create-form">
+        <label for="agent-key-name">Key name</label>
+        <input class="input" id="agent-key-name" name="name" value="{{.MintName}}" placeholder="e.g. work laptop" autocomplete="off">
+        <button class="btn btn-primary w-full mt-5" type="submit">{{template "iconKey"}} Create key</button>
+      </form>
+      <p class="key-create-note">{{template "iconShield"}}Keys are shown once. Copy yours after creating it.</p>
+      <p class="agent-key-note">Keys for registered agents live on each agent’s own page.</p>
+    </aside>
   </div>
 </div>
 {{end}}

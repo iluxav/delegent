@@ -4,7 +4,7 @@
 // order, so a burst of events still reads as a sequence. A finished run can be replayed.
 (() => {
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE_W = 176, NODE_H = 72, GAP = 72, TOP = 150, YOU_Y = 28, PAD = 28;
+  const NODE_W = 192, NODE_H = 100, GAP = 64, TOP = 174, YOU_Y = 24, PAD = 28;
   const PACKET_MS = 1100, STEP_GAP_MS = 350;
 
   function el(tag, attrs, parent) {
@@ -14,6 +14,14 @@
     return n;
   }
   function trunc(s, n) { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function fitLabel(node, text, width) {
+    const characters = Array.from((text || '').replace(/\s+/g, ' ').trim());
+    node.textContent = characters.join('');
+    while (characters.length && node.getComputedTextLength() > width) {
+      characters.pop();
+      node.textContent = characters.join('') + '…';
+    }
+  }
 
   class Flow {
     constructor(root) {
@@ -38,7 +46,13 @@
       this.installPanZoom();
       this.poll();
       this.timer = setInterval(() => this.poll(), 1000);
-      const stop = () => { if (!document.body.contains(root)) clearInterval(this.timer); };
+      const stop = () => {
+        if (!document.body.contains(root)) {
+          clearInterval(this.timer);
+          this.resizeObserver.disconnect();
+          document.body.removeEventListener('htmx:afterSwap', stop);
+        }
+      };
       document.body.addEventListener('htmx:afterSwap', stop);
     }
 
@@ -99,7 +113,8 @@
         const c = { x: this.view.x + this.view.w / 2, y: this.view.y + this.view.h / 2 };
         this.zoomAt(mode === 'in' ? 0.8 : 1.25, c);
       }));
-      new ResizeObserver(() => this.applyView()).observe(this.stage);
+      this.resizeObserver = new ResizeObserver(() => this.applyView());
+      this.resizeObserver.observe(this.stage);
     }
     toSVG(cx, cy) {
       const r = this.svg.getBoundingClientRect();
@@ -114,6 +129,7 @@
       this.applyView();
     }
     fit() {
+      if (!this.stage.clientWidth || !this.stage.clientHeight) return;
       const aspect = this.stage.clientWidth / Math.max(1, this.stage.clientHeight);
       let w = this.content.w, h = w / aspect;
       if (h < this.content.h) { h = this.content.h; w = h * aspect; }
@@ -121,6 +137,7 @@
       this.applyView();
     }
     applyView() {
+      if (!this.stage.clientWidth || !this.stage.clientHeight) return;
       const aspect = this.stage.clientWidth / Math.max(1, this.stage.clientHeight);
       this.view.h = this.view.w / aspect;
       this.svg.setAttribute('viewBox', `${this.view.x} ${this.view.y} ${this.view.w} ${this.view.h}`);
@@ -151,12 +168,15 @@
 
     drawNode(index, p, x, y) {
       const g = el('g', { class: `flow-node flow-kind-${p.kind}`, transform: `translate(${x} ${y})` }, this.nodeLayer);
-      const box = el('rect', { width: NODE_W, height: NODE_H, rx: 12 }, g);
-      el('text', { x: 14, y: 26, class: 'flow-node-name' }, g).textContent = p.name;
+      el('title', {}, g).textContent = p.name;
+      const box = el('rect', { width: NODE_W, height: NODE_H, rx: 9 }, g);
+      const name = el('text', { x: 14, y: 26, class: 'flow-node-name' }, g);
+      fitLabel(name, p.name, NODE_W - 28);
       el('text', { x: 14, y: 44, class: 'flow-node-kind' }, g).textContent = p.kind === 'you' ? 'operator' : p.kind === 'harness' ? 'client · key' : 'agent · target';
-      const state = el('text', { x: NODE_W - 12, y: 26, 'text-anchor': 'end', class: 'flow-node-state' }, g);
+      el('path', { d: `M14 55H${NODE_W - 14}`, class: 'flow-node-divider' }, g);
+      const state = el('text', { x: 14, y: 73, class: 'flow-node-state' }, g);
       state.textContent = 'idle';
-      const data = el('text', { x: 14, y: 62, class: 'flow-node-data' }, g);
+      const data = el('text', { x: 14, y: 90, class: 'flow-node-data' }, g);
       const node = { index, g, box, state: 'idle', stateEl: state, data, x, y, w: NODE_W, h: NODE_H, kind: p.kind };
       return node;
     }
@@ -197,7 +217,7 @@
       n.g.classList.remove('is-working', 'is-waiting', 'is-deciding', 'is-refused');
       if (state !== 'idle' && state !== 'done') n.g.classList.add('is-' + state);
     }
-    setData(i, text) { const n = this.nodes[i]; if (n) n.data.textContent = trunc(text, 30); }
+    setData(i, text) { const n = this.nodes[i]; if (n) fitLabel(n.data, text, NODE_W - 28); }
 
     drain() {
       if (this.playing || !this.queue.length) return;

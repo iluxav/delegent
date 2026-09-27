@@ -112,7 +112,7 @@ func cmdStdio(args []string) error {
 		return err
 	}
 
-	user := e.operator
+	user, keyID := e.operator, ""
 	if gateway.AuthRequired(e.st) {
 		if *key == "" {
 			return errors.New("stdio needs an agent key: --key, or DELEGENT_AGENT_KEY (mint one with 'delegent key mint')")
@@ -125,7 +125,7 @@ func cmdStdio(args []string) error {
 			return errors.New("agent key is revoked")
 		}
 		_ = e.st.TouchAgentKey(ctx, k.ID, nowMillis())
-		user = k.UserID
+		user, keyID = k.UserID, k.ID
 	}
 
 	registry := gateway.NewRegistry(e.st, e.sealer)
@@ -159,7 +159,7 @@ func cmdStdio(args []string) error {
 	defer ln.Close()
 
 	log.Printf("[delegent] stdio up — operator %s | admin http://%s", user, ln.Addr())
-	err = registry.ServeStdio(ctx, user)
+	err = registry.ServeStdio(ctx, user, keyID)
 	// The stdio transport IS the connection: its end is the one disconnect this process can
 	// observe, so record it — the activity log should show when an agent's session ended.
 	_ = e.st.AppendEvent(context.Background(), &store.Event{
@@ -191,6 +191,12 @@ func mountAdmin(mux *http.ServeMux, e *env, reg *gateway.Registry, tgm *telegram
 	mux.Handle("PUT /admin/targets/{id}/policy", guard(a.putTargetPolicy))
 	mux.Handle("PUT /admin/targets/{id}/enabled", guard(a.setTargetEnabled))
 	mux.Handle("POST /admin/targets/{id}/introspect", guard(a.introspectTarget))
+	mux.Handle("PUT /admin/targets/{id}/access", guard(a.putTargetAccess))
+	mux.Handle("GET /admin/targets/{id}/remembered", guard(a.listRemembered))
+	mux.Handle("DELETE /admin/targets/{id}/remembered/{caller}", guard(a.forgetRemembered))
+	mux.Handle("GET /admin/relations", guard(a.listRelations))
+	mux.Handle("PUT /admin/relations/{agent}/{target}", guard(a.putRelation))
+	mux.Handle("DELETE /admin/relations/{agent}/{target}", guard(a.deleteRelation))
 	mux.Handle("PUT /admin/entitlements/{target}", guard(a.putEntitlement))
 	mux.Handle("GET /admin/keys", guard(a.listKeys))
 	mux.Handle("POST /admin/keys", guard(a.mintKey))
@@ -243,6 +249,10 @@ type resolveReq struct {
 	Scopes     []string `json:"scopes"` // approve-only; empty = every requested scope
 	TTLMinutes int      `json:"ttl_minutes"`
 	BudgetUSD  float64  `json:"budget_usd"`
+	// Always also remembers the decision for the asking key on the target for the granted
+	// scopes — the "always for A→B, these skills" answer. Approve-only; honoured when the target
+	// is set to ask once per caller.
+	Always bool `json:"always"`
 }
 
 func (a *adminEnv) resolveConsent(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +287,7 @@ func (a *adminEnv) resolveConsent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ok, err := a.reg.ResolveConsent(a.e.operator, id, granted, req.TTLMinutes, req.BudgetUSD)
+	ok, err := a.reg.ResolveConsentAlways(a.e.operator, id, granted, req.TTLMinutes, req.BudgetUSD, req.Approve && req.Always)
 	if err != nil {
 		adminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

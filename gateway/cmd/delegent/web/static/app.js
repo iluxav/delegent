@@ -205,7 +205,7 @@
       link.classList.toggle('is-active', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
-    $('#workspace-location').textContent = target === 'new' ? 'Connect a server' : target ? ($('.target-title h2')?.textContent || 'Server') : page === 'keys' ? 'Keys' : page === 'runs' ? 'Agent runs' : 'Overview';
+    $('#workspace-location').textContent = target === 'new' ? 'Connect a server' : target ? ($('.target-title h2')?.textContent || 'Server') : page === 'keys' ? 'Keys' : page === 'runs' ? 'Agent runs' : page === 'relationships' ? 'Relationships' : 'Overview';
     $$('.server-link').forEach((link) => {
       const selected = link.dataset.server === target;
       link.classList.toggle('is-active', selected);

@@ -27,9 +27,109 @@
   <a class="mtab {{if eq .Tab "adapter"}}mtab-on{{end}}" {{if eq .Tab "adapter"}}aria-current="page"{{end}} href="/targets/{{$t.ID}}" hx-get="/targets/{{$t.ID}}" hx-target="#main" hx-push-url="true">Tool policy</a>
   <a class="mtab {{if eq .Tab "audit"}}mtab-on{{end}}" {{if eq .Tab "audit"}}aria-current="page"{{end}} href="/targets/{{$t.ID}}/audit" hx-get="/targets/{{$t.ID}}/audit" hx-target="#main" hx-push-url="true">Activity</a>
   <a class="mtab {{if eq .Tab "consents"}}mtab-on{{end}}" {{if eq .Tab "consents"}}aria-current="page"{{end}} href="/targets/{{$t.ID}}/consents" hx-get="/targets/{{$t.ID}}/consents" hx-target="#main" hx-push-url="true">Approvals{{if .LiveCount}} <span class="pill bg-warn-soft text-warn">{{.LiveCount}} waiting</span>{{end}}</a>
+  <a class="mtab {{if eq .Tab "access"}}mtab-on{{end}}" {{if eq .Tab "access"}}aria-current="page"{{end}} href="/targets/{{$t.ID}}/access" hx-get="/targets/{{$t.ID}}/access" hx-target="#main" hx-push-url="true">Access</a>
+  {{if .IsAgent}}<a class="mtab {{if eq .Tab "keys"}}mtab-on{{end}}" {{if eq .Tab "keys"}}aria-current="page"{{end}} href="/targets/{{$t.ID}}/keys" hx-get="/targets/{{$t.ID}}/keys" hx-target="#main" hx-push-url="true">Agent keys{{if .AgentKeys}} <span class="count">{{len .AgentKeys}}</span>{{end}}</a>{{end}}
 </nav>
 </div>
-{{if eq .Tab "audit"}}{{template "auditPane" .}}{{else if eq .Tab "consents"}}{{template "consentsPane" .}}{{else}}{{template "adapterPane" .}}{{end}}
+{{if eq .Tab "audit"}}{{template "auditPane" .}}{{else if eq .Tab "consents"}}{{template "consentsPane" .}}{{else if eq .Tab "access"}}{{template "accessPane" .}}{{else if eq .Tab "keys"}}{{template "agentKeysPane" .}}{{else}}{{template "adapterPane" .}}{{end}}
+{{end}}
+
+{{/* accessPane: who may call this server, and whether they are asked. One setting each —
+     the callee decides, and every caller's tool list follows. */}}
+{{define "accessPane"}}
+{{$t := .T}}
+<div class="access-layout">
+<div class="access-form">
+<form hx-post="/targets/{{$t.ID}}/access" hx-target="#main" hx-disabled-elt="find button[type='submit']" data-track-changes>
+<section class="content-section">
+  <div class="section-heading"><div><h3>Agents and {{$t.Name}}</h3><p class="section-description">Your own clients always see it. Which agents see it is decided on each agent’s own page (“what it can use”) and shown here as the result — the <a class="link" href="/relationships" hx-get="/relationships" hx-target="#main" hx-push-url="true">relationship map</a> read from this side. The one thing set here is the lock.</p></div></div>
+  <div class="access-options" role="radiogroup" aria-label="Lock">
+    <label class="access-option"><input type="radio" name="audience" value="" {{if eq .Audience ""}}checked{{end}}><span><strong>Agents may use it</strong><span>Each agent per its own exposure. The default.</span></span></label>
+    <label class="access-option"><input type="radio" name="audience" value="humans" {{if eq .Audience "humans"}}checked{{end}}><span><strong>Locked: no agent</strong><span>Only your own clients, whatever any agent’s exposure says. For a server holding something no agent should touch.</span></span></label>
+  </div>
+  <div class="caller-list" aria-label="Seen by">
+    <p class="text-xs font-medium">Seen by {{if .Callers}}<span class="count">{{len .Callers}}</span>{{end}}</p>
+    {{range .Callers}}<p class="py-1 text-xs"><a class="link" href="/targets/{{.ID}}/access" hx-get="/targets/{{.ID}}/access" hx-target="#main" hx-push-url="true">{{.Label}}</a>{{if .Detail}} <span class="font-mono text-[11px] text-ink-faint">{{.Detail}}</span>{{end}}</p>
+    {{else}}<p class="py-1 text-xs text-ink-soft">{{if eq .Audience "humans"}}No agent — it is locked.{{else}}No agent sees it right now.{{end}}</p>{{end}}
+  </div>
+</section>
+<section class="content-section">
+  <div class="section-heading"><div><h3>When to ask</h3><p class="section-description">Whether a permitted caller needs your approval on {{$t.Name}}. Where that approval shows up is the caller’s choice, set on its key. A spend always asks, whatever is set here.</p></div></div>
+  <div class="access-options" role="radiogroup" aria-label="When to ask">
+    <label class="access-option"><input type="radio" name="consent" value="" {{if eq .Consent ""}}checked{{end}}><span><strong>Ask every time</strong><span>A human decides each grant, for the time they choose.</span></span></label>
+    <label class="access-option"><input type="radio" name="consent" value="remember" {{if eq .Consent "remember"}}checked{{end}}><span><strong>Ask once per caller, then remember</strong><span>The approval offers “always”. Ticking it remembers the granted capabilities for that caller, listed below.</span></span></label>
+    <label class="access-option"><input type="radio" name="consent" value="allow" {{if eq .Consent "allow"}}checked{{end}}><span><strong>Never ask for read and write</strong><span>Permitted callers use it without a prompt. Every call is still logged and receipted.</span></span></label>
+  </div>
+  <div class="save-bar"><button class="btn btn-primary" type="submit">Save access</button><span class="save-hint" data-save-hint>Applies immediately to every caller.</span><span class="save-hint dirty-note" data-dirty-note role="status" hidden>Unsaved changes</span></div>
+</section>
+</form>
+{{if .IsAgent}}
+<form hx-post="/targets/{{$t.ID}}/uses" hx-target="#main" hx-disabled-elt="find button[type='submit']" data-track-changes>
+<section class="content-section uses-section">
+  <div class="section-heading"><div><h3>What {{$t.Name}} can use</h3><p class="section-description">The servers and agents this agent sees in its tool list — its exposure, and the only place the relationship map is authored. A locked server stays out whatever is ticked.</p></div></div>
+  <div class="access-options" role="radiogroup" aria-label="What this agent can use">
+    <label class="access-option"><input type="radio" name="uses" value="" {{if eq .Uses ""}}checked{{end}}><span><strong>Everything</strong><span>Every server that is not locked. Right for a general assistant.</span></span></label>
+    <label class="access-option"><input type="radio" name="uses" value="listed" {{if eq .Uses "listed"}}checked{{end}}><span><strong>Only these</strong><span>The servers ticked below, so a specialised agent carries only the tools it needs.</span></span></label>
+  </div>
+  <div class="caller-list" aria-label="Targets">
+    {{range .UsesList}}<label class="scope-row"><input type="checkbox" name="uses_targets" value="{{.ID}}" {{if .Checked}}checked{{end}} class="mt-1"><span class="min-w-0 flex-1"><span class="flex items-baseline gap-2"><span class="text-xs font-medium">{{.Label}}</span><span class="pill bg-panel text-ink-faint">{{.Detail}}</span>{{if .Blocked}}<span class="pill bg-warn-soft text-warn">{{.Blocked}}</span>{{end}}</span></span></label>
+    {{else}}<p class="py-3 text-xs text-ink-soft">No other servers registered yet.</p>{{end}}
+    <p class="text-xs text-ink-faint">Each tick is one edge of the relationship map; the server’s page lists this agent under “seen by”.</p>
+  </div>
+  <div class="save-bar"><button class="btn btn-primary" type="submit">Save what it uses</button><span class="save-hint dirty-note" data-dirty-note role="status" hidden>Unsaved changes</span></div>
+</section>
+</form>
+{{end}}
+<section class="content-section">
+  <div class="section-heading"><div><h3>Remembered approvals <span class="count">{{len .Remembered}}</span></h3><p class="section-description">Callers a human said “always” for on this server — an agent by its role, whichever key it holds. Forget one and it asks again.</p></div></div>
+  {{if .Remembered}}<table class="policy-table">
+    {{range .Remembered}}<tr>
+      <td class="policy-target">{{.Caller}}</td>
+      <td class="policy-note">{{.Scopes}}{{if .Reason}}<span class="text-ink-faint"> · {{.Reason}}</span>{{end}}</td>
+      <td class="text-right"><form hx-post="/targets/{{$t.ID}}/remembered/{{.CallerID}}/forget" hx-target="#main"><button class="btn" type="submit">Forget</button></form></td>
+    </tr>{{end}}
+  </table>{{else}}<p class="py-3 text-xs text-ink-soft">Nothing remembered yet.{{if ne .Consent "remember"}} Set “When to ask” to “ask once per caller” and approvals offer “always”.{{end}}</p>{{end}}
+</section>
+</div>
+<aside class="access-graph" aria-label="Reach">
+  <div class="access-graph-heading"><h3>Reach</h3><p>Who can call {{$t.Name}}, and what it can reach from there. Arrows follow each agent’s exposure; the badge is how it asks. Click a box to open it.</p></div>
+  <div class="access-graph-stage">{{.Graph}}</div>
+  <ul class="access-graph-legend"><li><span class="ag-key ag-key-agent"></span>agent</li><li><span class="ag-key ag-key-mcp"></span>MCP server</li><li><span class="ag-key ag-key-strong"></span>to or from {{$t.Name}}</li></ul>
+</aside>
+</div>
+{{end}}
+
+{{/* agentKeysPane: the keys THIS agent presents when it calls other servers through the
+     gateway. A person's keys live on the Keys page; these live with the agent. */}}
+{{define "agentKeysPane"}}
+{{$t := .T}}
+{{if .Minted}}
+<section class="minted-key content-section" role="status" aria-labelledby="minted-title">
+  <div class="connection-section-heading"><h2 id="minted-title">{{$t.Name}}’s new key <span>· shown once</span></h2><button class="btn" type="button" data-copy="#minted" aria-label="Copy new agent key">Copy key</button></div>
+  <code id="minted">{{.Minted}}</code>
+  <p class="connection-help mt-3">Give it to the agent as its bearer for <code>/mcp</code> or <code>/a2a/…</code>. It should echo <code>X-Delegent-Session</code> on every call it makes.</p>
+</section>
+{{end}}
+<section class="content-section">
+  <div class="section-heading"><div><h3>Keys issued to {{$t.Name}} <span class="count">{{len .AgentKeys}}</span></h3><p class="section-description">What this agent presents when it calls other servers through Delegent. When one of its calls needs your approval, the ask is parked in the Approvals tab of the server it called, and sent to Telegram if you connected it — an agent has no chat to show a dialog in. Whether it needs approval at all is that server’s “When to ask”.</p></div></div>
+  <ul class="key-list" aria-label="Agent keys">
+    {{range .AgentKeys}}
+    <li class="key-card">
+      <div class="key-card-heading"><h3>{{.Name}}</h3><span class="key-status">Active</span></div>
+      <div class="key-metadata"><code>{{.Prefix}}…</code><span>{{.LastUsed}}</span></div>
+      <div class="key-actions">
+        <button class="btn" type="button" hx-post="/keys/{{.ID}}/roll" hx-target="#main" hx-confirm="Rotate {{.Name}}? A new key is created and the current key stops working immediately." aria-label="Rotate {{.Name}} key">Rotate key</button>
+        <button class="btn text-bad" type="button" hx-post="/keys/{{.ID}}/revoke" hx-target="#main" hx-confirm="Revoke {{.Name}}? The agent using it stops working immediately." aria-label="Revoke {{.Name}} key">Revoke key</button>
+      </div>
+    </li>
+    {{else}}<li class="keys-empty"><span>{{template "iconKey"}}</span><h3>No keys yet</h3><p>{{$t.Name}} needs a key only if it calls other servers through Delegent.</p></li>{{end}}
+  </ul>
+  <form hx-post="/targets/{{$t.ID}}/keys" hx-target="#main" hx-disabled-elt="find button" class="key-create-form mt-4">
+    <label for="agent-key-name">New key name <span class="text-ink-faint">· optional</span></label>
+    <input class="input" id="agent-key-name" name="name" placeholder="e.g. {{$t.ID}} prod" autocomplete="off">
+    <button class="btn btn-primary mt-3" type="submit">{{template "iconKey"}} Create key for {{$t.Name}}</button>
+  </form>
+</section>
 {{end}}
 
 {{define "adapterPane"}}

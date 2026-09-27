@@ -282,7 +282,13 @@ func (r *Registry) PendingConsents(owner string) []PendingView {
 // uses; deny → empty granted). ok=false when no gateway holds the id (unknown/expired/already
 // resolved) — safe to call blind. Deny is expressed as an empty granted slice.
 func (r *Registry) ResolveConsent(owner, id string, granted []string, ttlMinutes int, budgetUSD float64) (ok bool, err error) {
-	d := consoleDecision{owner: owner, granted: granted, ttlMinutes: ttlMinutes, budgetUSD: budgetUSD}
+	return r.ResolveConsentAlways(owner, id, granted, ttlMinutes, budgetUSD, false)
+}
+
+// ResolveConsentAlways is ResolveConsent with the "always" choice: on approval, the asking
+// key gets a standing allow for the granted scopes on the target (plan item 8).
+func (r *Registry) ResolveConsentAlways(owner, id string, granted []string, ttlMinutes int, budgetUSD float64, always bool) (ok bool, err error) {
+	d := consoleDecision{owner: owner, granted: granted, ttlMinutes: ttlMinutes, budgetUSD: budgetUSD, always: always}
 	for _, gw := range r.builtInstances() {
 		if found, _, _ := gw.ResolvePending(id, d); found {
 			return true, nil

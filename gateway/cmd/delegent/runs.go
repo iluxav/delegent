@@ -493,7 +493,16 @@ func (w *webApp) findRun(r *http.Request, root string) *run {
 }
 
 func (w *webApp) runsPage(rw http.ResponseWriter, r *http.Request) {
-	w.page(rw, r, "", "runsPage", map[string]any{"Runs": w.loadRuns(r)})
+	runs := w.loadRuns(r)
+	running, waiting := 0, 0
+	for _, run := range runs {
+		if run.StatusTone == "warn" {
+			waiting++
+		} else if run.Status == "running" {
+			running++
+		}
+	}
+	w.page(rw, r, "", "runsPage", map[string]any{"Runs": runs, "Running": running, "Waiting": waiting})
 }
 
 func (w *webApp) runPage(rw http.ResponseWriter, r *http.Request) {

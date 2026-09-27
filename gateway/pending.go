@@ -48,6 +48,7 @@ type pendingConsent struct {
 	Caller    string
 	Label     string
 	Key       string // the calling key's name, for the activity log of a later console decision
+	KeyID     string // who an "always" is remembered for: the agent's id, or a person's key id
 	CreatedAt int64  // unix millis
 	ExpiresAt int64  // unix millis
 	used      bool
@@ -155,13 +156,14 @@ func (p *pendingStore) setDisplay(id, headline, intent string) {
 }
 
 // setCaller stashes the caller's display name and the label the granted session will carry.
-func (p *pendingStore) setCaller(id, caller, label, key string) {
+func (p *pendingStore) setCaller(id, caller, label, key, keyID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if pc, ok := p.m[id]; ok {
 		pc.Caller = caller
 		pc.Label = label
 		pc.Key = key
+		pc.KeyID = keyID
 	}
 }
 

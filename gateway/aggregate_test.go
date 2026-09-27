@@ -53,7 +53,7 @@ func aggFixture(t *testing.T) *Registry {
 
 func TestAggregateAssembly(t *testing.T) {
 	r := aggFixture(t)
-	a, err := newAggregate(context.Background(), r, "usr_op")
+	a, err := newAggregate(context.Background(), r, "usr_op", "")
 	if err != nil {
 		t.Fatalf("newAggregate: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAggregateAssembly(t *testing.T) {
 
 func TestAggregateResolveTarget(t *testing.T) {
 	r := aggFixture(t)
-	a, _ := newAggregate(context.Background(), r, "usr_op")
+	a, _ := newAggregate(context.Background(), r, "usr_op", "")
 
 	// explicit target always wins
 	if got, errText := a.resolveTarget("conn1", "tv"); got != "tv" || errText != "" {
@@ -112,7 +112,7 @@ func TestAggregateResolveTarget(t *testing.T) {
 // exactly as a direct connection would.
 func TestAggregatePropagatesCapsAndPolicy(t *testing.T) {
 	r := aggFixture(t)
-	a, _ := newAggregate(context.Background(), r, "usr_op")
+	a, _ := newAggregate(context.Background(), r, "usr_op", "")
 	a.setCaps("conn1", clientCaps{elicitation: true})
 
 	g := r.slots["gh"].gw.(*Gateway)
@@ -141,7 +141,7 @@ func TestAggregateRetriesMissingTargets(t *testing.T) {
 		return tv, nil
 	}
 	ctx := context.Background()
-	a1, err := r.aggregateFor(ctx, "usr_op")
+	a1, err := r.aggregateFor(ctx, "usr_op", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,12 +150,12 @@ func TestAggregateRetriesMissingTargets(t *testing.T) {
 	}
 	// Within the grace period the same aggregate is served, even though tv is up now.
 	fail = false
-	if a2, _ := r.aggregateFor(ctx, "usr_op"); a2 != a1 {
+	if a2, _ := r.aggregateFor(ctx, "usr_op", ""); a2 != a1 {
 		t.Fatal("rebuilt before the grace period")
 	}
 	// Past it, the next request rebuilds and picks tv up.
 	a1.builtAt = time.Now().Add(-2 * incompleteRetry)
-	a3, err := r.aggregateFor(ctx, "usr_op")
+	a3, err := r.aggregateFor(ctx, "usr_op", "")
 	if err != nil {
 		t.Fatal(err)
 	}

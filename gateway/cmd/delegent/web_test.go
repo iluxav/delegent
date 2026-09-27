@@ -907,7 +907,7 @@ func TestDashboardConsentChannels(t *testing.T) {
 	id := regexp.MustCompile(`/keys/(akey_[^/]+)/roll`).FindStringSubmatch(body)[1]
 
 	// a fresh key is on auto, and every preset the terminal dashboard offers is offered here
-	if !strings.Contains(body, "Ask for consent through") {
+	if !strings.Contains(body, "Approvals appear in") {
 		t.Fatalf("no consent-channel picker:\n%s", body)
 	}
 	for _, want := range []string{"auto", "console only", "in-chat first", "widget first"} {

@@ -61,6 +61,26 @@ func keyIdentityFromContext(ctx context.Context) (keyPrefix, keyName, remoteIP s
 	return get("key_prefix"), get("key_name"), get("remote_ip")
 }
 
+// keyFromContext rebuilds the calling key's identity (id and the agent it was issued to) from
+// the verified token, enough for store.Target.Admits. Nil when auth is off: the operator.
+func keyFromContext(ctx context.Context) *store.AgentKey {
+	id := keyIDFromContext(ctx)
+	if id == "" {
+		return nil
+	}
+	return &store.AgentKey{ID: id, AgentTargetID: agentTargetFromContext(ctx)}
+}
+
+// rememberCallerFromContext is the identity a remembered "always" attaches to: the agent's
+// target id when an agent is calling (the role, whichever key it holds), else the key id of
+// the person's client. Empty when auth is off — nothing to remember for.
+func rememberCallerFromContext(ctx context.Context) string {
+	if a := agentTargetFromContext(ctx); a != "" {
+		return a
+	}
+	return keyIDFromContext(ctx)
+}
+
 // channelPolicyFromContext reads the agent key's consent-channel policy that makeVerifier
 // threaded through the auth TokenInfo Extra. Nil (= auto) when auth is off or no policy is set.
 func channelPolicyFromContext(ctx context.Context) []string {
@@ -95,6 +115,16 @@ type parentOverrideKey struct{}
 // than a header (an A2A message's metadata), when no header named one.
 func withParent(ctx context.Context, parent string) context.Context {
 	return context.WithValue(ctx, parentOverrideKey{}, parent)
+}
+
+// keyIDFromContext reads the calling key's id ("" when auth is off).
+func keyIDFromContext(ctx context.Context) string {
+	ti := auth.TokenInfoFromContext(ctx)
+	if ti == nil || ti.Extra == nil {
+		return ""
+	}
+	id, _ := ti.Extra["key_id"].(string)
+	return id
 }
 
 // agentTargetFromContext reads the agent target the calling key was issued for ("" for a

@@ -34,6 +34,8 @@ const (
 	fileAdapters     = "adapters.json"
 	fileAdvisors     = "advisors.json"
 	fileAgentKeys    = "agent_keys.json"
+	fileRemembered   = "remembered.json"
+	fileRelations    = "relations.json"
 	fileEntitlements = "entitlements.json"
 	fileConsents     = "consent_requests.json"
 	fileOAuthClients = "oauth_clients.json"
@@ -118,6 +120,12 @@ func (js *JSONFileStore) load() error {
 		return err
 	}
 	if err := loadInto(p(fileAdvisors), func(a *AdvisorDoc) { m.advisors[a.ID] = a }); err != nil {
+		return err
+	}
+	if err := loadInto(p(fileRemembered), func(k *Remembered) { m.remembered[policyKey(k.Caller, k.TargetID)] = k }); err != nil {
+		return err
+	}
+	if err := loadInto(p(fileRelations), func(r *Relation) { m.relations[policyKey(r.Agent, r.Target)] = r }); err != nil {
 		return err
 	}
 	if err := loadInto(p(fileAgentKeys), func(k *AgentKey) { m.agentKeys[k.ID] = k }); err != nil {
@@ -405,6 +413,42 @@ func (js *JSONFileStore) PutEntitlement(ctx context.Context, e *Entitlement) err
 		return err
 	}
 	return js.saveEntitlements()
+}
+
+func (js *JSONFileStore) saveRemembered() error {
+	return js.save(fileRemembered, func() any { return sortedVals(js.MemStore.remembered) })
+}
+
+func (js *JSONFileStore) PutRemembered(ctx context.Context, p *Remembered) error {
+	if err := js.MemStore.PutRemembered(ctx, p); err != nil {
+		return err
+	}
+	return js.saveRemembered()
+}
+
+func (js *JSONFileStore) DeleteRemembered(ctx context.Context, caller, targetID string) error {
+	if err := js.MemStore.DeleteRemembered(ctx, caller, targetID); err != nil {
+		return err
+	}
+	return js.saveRemembered()
+}
+
+func (js *JSONFileStore) saveRelations() error {
+	return js.save(fileRelations, func() any { return sortedVals(js.MemStore.relations) })
+}
+
+func (js *JSONFileStore) PutRelation(ctx context.Context, rel *Relation) error {
+	if err := js.MemStore.PutRelation(ctx, rel); err != nil {
+		return err
+	}
+	return js.saveRelations()
+}
+
+func (js *JSONFileStore) DeleteRelation(ctx context.Context, agent, target string) error {
+	if err := js.MemStore.DeleteRelation(ctx, agent, target); err != nil {
+		return err
+	}
+	return js.saveRelations()
 }
 
 func (js *JSONFileStore) PutAgentKey(ctx context.Context, k *AgentKey) error {

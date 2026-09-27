@@ -102,7 +102,7 @@ func approvalsList(args []string) error {
 		}
 		fmt.Printf("%-14s parked   %-12s %s — %s\n", p.ID, p.AgentName, p.TargetID, line)
 	}
-	fmt.Println("\nresolve with: delegent approvals approve|deny <id> [--scopes a,b] [--ttl 60]")
+	fmt.Println("\nresolve with: delegent approvals approve|deny <id> [--scopes a,b] [--ttl 60] [--always]")
 	return nil
 }
 
@@ -112,6 +112,7 @@ func approvalsResolve(verb string, args []string) error {
 	scopes := fs.String("scopes", "", "approve only these comma-separated scopes (default: all requested)")
 	ttl := fs.Int("ttl", 0, "grant lifetime in minutes (0 = the gateway default)")
 	budget := fs.Float64("budget", 0, "spend ceiling in USD (0 = none)")
+	always := fs.Bool("always", false, "approve only: also make it standing policy — this key may use the granted scopes on this target from now on without asking")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func approvalsResolve(verb string, args []string) error {
 		return err
 	}
 
-	req := resolveReq{Approve: verb == "approve", TTLMinutes: *ttl, BudgetUSD: *budget}
+	req := resolveReq{Approve: verb == "approve", TTLMinutes: *ttl, BudgetUSD: *budget, Always: *always && verb == "approve"}
 	if *scopes != "" {
 		req.Scopes = strings.Split(*scopes, ",")
 	}

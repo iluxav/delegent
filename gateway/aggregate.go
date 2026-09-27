@@ -47,6 +47,7 @@ type aggRoute struct {
 // user (the tool list IS the user's entitlements) and dropped whenever any target changes.
 type Aggregate struct {
 	user    string
+	key     string // the agent key this aggregate was built for ("" = no key / dev)
 	reg     *Registry
 	server  *mcp.Server
 	handler http.Handler
@@ -98,15 +99,25 @@ func aggregateInstructions(services []string) string {
 
 // newAggregate assembles the user's aggregate: entitled+enabled targets only. A target whose
 // gateway fails to build is SKIPPED (logged) — one broken vendor must not take down the rest.
-func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, error) {
+func newAggregate(ctx context.Context, r *Registry, userID, keyID string) (*Aggregate, error) {
 	ts, err := r.st.ListTargets(ctx)
 	if err != nil {
 		return nil, err
 	}
 	sort.Slice(ts, func(i, j int) bool { return ts[i].ID < ts[j].ID })
+	// The caller: a target the relationship map hides from this key is not offered at all — to
+	// this caller it does not exist. No key (the operator's stdio, auth off) sees everything.
+	var key *store.AgentKey
+	if keyID != "" {
+		if k, err := r.st.GetAgentKey(ctx, keyID); err == nil {
+			key = k
+		} else {
+			key = &store.AgentKey{ID: keyID}
+		}
+	}
 
 	a := &Aggregate{
-		user: userID, reg: r,
+		user: userID, key: keyID, reg: r,
 		routes:     map[string]aggRoute{},
 		byConnCaps: map[string]clientCaps{},
 		lastTarget: map[string]string{},
@@ -115,7 +126,7 @@ func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, 
 	// instructions can teach discovery (a target that later fails to build just has no tools)
 	var included []string
 	for _, t := range ts {
-		if !t.Enabled {
+		if !t.Enabled || !store.Visible(ctx, r.st, key, t) {
 			continue
 		}
 		if _, err := r.st.GetEntitlement(ctx, userID, t.ID); err != nil {
@@ -144,7 +155,7 @@ func newAggregate(ctx context.Context, r *Registry, userID string) (*Aggregate, 
 	})
 
 	for _, t := range ts {
-		if !t.Enabled {
+		if !t.Enabled || !store.Visible(ctx, r.st, key, t) {
 			continue
 		}
 		if _, err := r.st.GetEntitlement(ctx, userID, t.ID); err != nil {
@@ -297,6 +308,10 @@ func (a *Aggregate) addEntryTools(s *mcp.Server) {
 		Meta:        mcp.Meta{"ui": map[string]any{"resourceUri": consentWidgetURI, "visibility": []string{"app"}}},
 	}, a.handleSubmitConsent)
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "services",
+		Description: "List the services this connection can reach and where each stands for you: allowed (no approval needed for the listed capabilities), asks (a human approves), or your standing grants. Call this first when deciding which service to use.",
+	}, a.handleServices)
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "receipts",
 		Description: "Return the audit trail of every access decision Delegent has made across your connected services.",
 	}, a.handleReceipts)
@@ -393,6 +408,65 @@ func (a *Aggregate) handlePlanAccess(ctx context.Context, req *mcp.CallToolReque
 	return text(strings.Join(parts, "\n\n")), structured, nil
 }
 
+// serviceStatus is one row of the discovery listing: a target and whether the calling key
+// will be asked there. Targets outside the caller's audience are not listed — to the caller
+// they do not exist.
+type serviceStatus struct {
+	Service string   `json:"service"`
+	Kind    string   `json:"kind"`             // "agent" | "mcp"
+	Status  string   `json:"status"`           // "allowed" | "asks first"
+	Always  []string `json:"always,omitempty"` // scopes granted without asking ("*" = every scope)
+	Tools   []string `json:"tools,omitempty"`
+}
+
+// standingFor is the discovery status of target t for caller (an agent's id or a person's
+// key id): allowed for every scope when the target never asks, allowed for the remembered
+// scopes when a human said always, else asks first.
+func standingFor(ctx context.Context, st store.Store, t *store.Target, caller string) (status string, always []string) {
+	if t != nil && t.Consent == store.ConsentAllow {
+		return "allowed", []string{"*"}
+	}
+	if caller != "" {
+		if p, err := st.GetRemembered(ctx, caller, t.ID); err == nil {
+			if len(p.Scopes) == 0 {
+				return "allowed", []string{"*"}
+			}
+			return "allowed", p.Scopes
+		}
+	}
+	return "asks first", nil
+}
+
+func (a *Aggregate) handleServices(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	var rows []serviceStatus
+	var lines []string
+	for _, targetID := range a.targets {
+		row := serviceStatus{Service: targetID, Kind: "mcp", Status: "asks first"}
+		if t, err := a.reg.st.GetTarget(ctx, targetID); err == nil {
+			if t.Kind == TargetKindA2A {
+				row.Kind = "agent"
+			}
+			row.Status, row.Always = standingFor(ctx, a.reg.st, t, rememberCallerFromContext(ctx))
+		}
+		for ns, route := range a.routes {
+			if route.targetID == targetID {
+				row.Tools = append(row.Tools, ns)
+			}
+		}
+		sort.Strings(row.Tools)
+		rows = append(rows, row)
+		line := "- " + targetID + " (" + row.Kind + "): " + row.Status
+		if len(row.Always) > 0 {
+			line += " for " + strings.Join(row.Always, ", ")
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		lines = []string{"No services are connected for you."}
+	}
+	return text(strings.Join(lines, "\n")), map[string]any{"services": rows}, nil
+}
+
 func (a *Aggregate) handleReceipts(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 	var parts []string
 	structured := map[string]any{}
@@ -477,11 +551,12 @@ func (r *Registry) ServeAggregate(w http.ResponseWriter, req *http.Request) {
 			ResourceMetadataURL: ResourceMetadataURL(req),
 		})(
 			http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				user := ""
+				user, keyID := "", ""
 				if ti := auth.TokenInfoFromContext(req.Context()); ti != nil {
 					user = ti.UserID
+					keyID, _ = ti.Extra["key_id"].(string)
 				}
-				r.serveAggregateAs(w, req, user)
+				r.serveAggregateAs(w, req, user, keyID)
 			})).ServeHTTP(w, req)
 		return
 	}
@@ -490,11 +565,11 @@ func (r *Registry) ServeAggregate(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no users provisioned", http.StatusServiceUnavailable)
 		return
 	}
-	r.serveAggregateAs(w, req, us[0].ID)
+	r.serveAggregateAs(w, req, us[0].ID, "")
 }
 
-func (r *Registry) serveAggregateAs(w http.ResponseWriter, req *http.Request, user string) {
-	a, err := r.aggregateFor(req.Context(), user)
+func (r *Registry) serveAggregateAs(w http.ResponseWriter, req *http.Request, user, keyID string) {
+	a, err := r.aggregateFor(req.Context(), user, keyID)
 	if err != nil {
 		log.Printf("[delegent] aggregate for %q failed to build: %v", user, err)
 		http.Error(w, "gateway unavailable", http.StatusBadGateway)
@@ -509,41 +584,43 @@ func (r *Registry) serveAggregateAs(w http.ResponseWriter, req *http.Request, us
 // engine the per-target gateways then act for their default principal — the target owner —
 // which in a single-operator deployment is the same user. Blocks until ctx is cancelled or
 // the client closes stdin.
-func (r *Registry) ServeStdio(ctx context.Context, userID string) error {
-	a, err := r.aggregateFor(ctx, userID)
+func (r *Registry) ServeStdio(ctx context.Context, userID, keyID string) error {
+	a, err := r.aggregateFor(ctx, userID, keyID)
 	if err != nil {
 		return err
 	}
 	return a.server.Run(ctx, &mcp.StdioTransport{})
 }
 
-// aggregateFor returns the cached per-user aggregate, building it on first use.
-func (r *Registry) aggregateFor(ctx context.Context, userID string) (*Aggregate, error) {
+// aggregateFor returns the cached aggregate for a user's key, building it on first use. Keys
+// differ in what they may reach (each target's audience), so the cache is per key.
+func (r *Registry) aggregateFor(ctx context.Context, userID, keyID string) (*Aggregate, error) {
 	if userID == "" {
 		return nil, errors.New("no user identity on the connection")
 	}
+	cacheKey := userID + "|" + keyID
 	r.mu.Lock()
-	if a, ok := r.aggregates[userID]; ok {
+	if a, ok := r.aggregates[cacheKey]; ok {
 		// A build that skipped a target is retried once its grace period is over — a target
 		// that was merely not up yet must not stay missing until the next config change.
 		if !a.incomplete || time.Since(a.builtAt) < incompleteRetry {
 			r.mu.Unlock()
 			return a, nil
 		}
-		delete(r.aggregates, userID)
+		delete(r.aggregates, cacheKey)
 		log.Printf("[delegent] aggregate for %s was missing targets — rebuilding", userID)
 	}
 	r.mu.Unlock()
-	a, err := newAggregate(ctx, r, userID)
+	a, err := newAggregate(ctx, r, userID, keyID)
 	if err != nil {
 		return nil, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if prior, ok := r.aggregates[userID]; ok {
+	if prior, ok := r.aggregates[cacheKey]; ok {
 		return prior, nil // lost a benign build race — keep the first
 	}
-	r.aggregates[userID] = a
+	r.aggregates[cacheKey] = a
 	return a, nil
 }
 

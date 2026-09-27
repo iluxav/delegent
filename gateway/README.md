@@ -91,8 +91,8 @@ live). That one header is the whole integration:
   the child expires no later than its parent, revoking the parent's chain takes it down, and
   each hop spends one unit of delegation depth (`DELEGENT_MAX_DEPTH`, default 2) — a call
   past the limit is refused before anyone is asked.
-- **Without it** the call is parentless: the agent's own key policy applies, the prompt says
-  `registered agent 'researcher' — no parent task given`, and the human decides.
+- **Without it** the call is parentless: the prompt says `registered agent 'researcher' — no
+  parent task given`, and the human decides.
 
 **Agents that speak A2A on the way out too** need no MCP client. Delegent serves every fronted
 agent's card at `/a2a/<target>/.well-known/agent-card.json`, rewritten so the URL is Delegent's
@@ -180,6 +180,30 @@ Everything lives under `~/.delegent` (override: `--home` / `DELEGENT_HOME`):
 Receipts verify offline with the `delegent-proto` CLI from the protocol library — no gateway, no trust
 in this binary required. Tools introspection drafts a classification per tool; anything it
 can't classify is **refused until you classify it** in `adapters.json` (fail closed).
+
+**The relationship map.** By default every agent sees every target. Each agent's **Access**
+tab narrows *what it can use*: everything, or only the targets ticked there — the edges of one
+map, *agent may use target*, keyed by the agent's id, never by key. That is the only place the
+map is authored; a server's own Access tab shows *seen by*, the same edges read from its side,
+and holds one lock, *no agent*, for a server nothing autonomous should touch. The
+**Relationships** page draws the whole map. Your own clients always see everything. Outside
+its exposure a target does not exist to the agent (not in its tool list, not on `/a2a`, refused
+if called), so a specialised agent carries only the tools it needs and nobody goes around the
+agent meant to use a service. The same tab sets *when to ask*: every time (the default), once
+per caller and remember (approvals then offer **always**, remembered for the agent whichever
+key it holds, listed on the tab with a Forget button), or never for read and write. A spend
+always asks a human. From the shell: `delegent relation add researcher librarian`, `delegent
+target access researcher --uses listed --consent remember`, `delegent target access github
+--audience none`, `delegent target remembered <id> [--forget <caller>]`. The `services` tool
+tells a connected agent where it stands on each service it can see.
+
+**Two kinds of key, one page each.** The Keys page holds keys for the clients you operate
+(Claude Code, Pi, Hermes, scripts); each says where its approvals appear (in-chat dialog,
+widget, or the console). A registered A2A agent's own keys — what it presents when it calls
+other targets through Delegent — live on that agent's **Agent keys** tab; an agent has no chat
+to show a dialog in, so its asks are parked in the console (and Telegram, if connected).
+So two settings, two questions: the called server's **When to ask** decides *whether* a human
+is asked, the caller's key decides *where*.
 
 `DELEGENT_MAX_DEPTH` sets how many hops a human's grant may be handed down (default 2).
 

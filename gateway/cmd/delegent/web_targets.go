@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"sort"
@@ -59,7 +60,24 @@ type scopeRow struct {
 
 type targetView struct {
 	T   targetRow
-	Tab string // adapter | audit | consents
+	Tab string // adapter | audit | consents | access | keys
+	// IsAgent: the target is an A2A agent, which has its own keys (the Keys tab).
+	IsAgent bool
+
+	// access tab: the callee gate (Audience + Callers), the caller gate (Uses + UsesList,
+	// agents only), the consent mode, remembered decisions, and the reach diagram
+	Audience   string
+	Callers    []callerOption
+	Uses       string
+	UsesList   []callerOption
+	Consent    string
+	Remembered []rememberedView
+	Graph      template.HTML // the reach diagram (see accessGraph)
+
+	// keys tab (agents only)
+	AgentKeys []keyView
+	Presets   []channelPreset
+	Minted    string // plaintext of a key just minted or rolled — shown exactly once
 
 	// adapter tab
 	Tools     []toolRow
@@ -93,7 +111,8 @@ func (w *webApp) loadTarget(r *http.Request, id string) (*targetView, *store.Tar
 		return nil, nil, err
 	}
 	a := &adminEnv{e: w.e, reg: w.reg}
-	v := &targetView{T: a.targetRowFor(r, t), Effects: effects, Tab: "adapter"}
+	v := &targetView{T: a.targetRowFor(r, t), Effects: effects, Tab: "adapter", IsAgent: t.Kind == gateway.TargetKindA2A}
+	w.loadAccess(r, v, t)
 	// the tab bar shows a badge when an agent is blocked on this target right now
 	for _, p := range w.reg.PendingConsents(w.e.operator) {
 		if p.TargetID == t.ID {

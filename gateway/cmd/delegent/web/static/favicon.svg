@@ -1,1 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#d18a66"/><path d="M9 7h7a9 9 0 0 1 0 18H9V7Z" fill="none" stroke="#28180f" stroke-width="2.5"/><path d="M4 12h12m-12 8h12" stroke="#28180f" stroke-width="2.5" stroke-linecap="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <title>Delegent</title>
+  <style>.frame { fill: #995131; } .core { fill: #39322c; } @media (prefers-color-scheme: dark) { .frame { fill: #d18a66; } .core { fill: #f2e9e1; } }</style>
+  <!-- Keep the geometry in sync with brand.svg#mark; favicons cannot use external SVG references. -->
+  <path class="frame" d="M1 2h4v2H3v8h2v2H1V2Zm10 0h4v12h-4v-2h2V4h-2V2Z"/>
+  <path class="core" fill-rule="evenodd" d="M7 5h2v1h1v1h1v2h-1v1H9v1H7v-1H6V9H5V7h1V6h1ZM7 7v2h2V7Z"/>
+</svg>

@@ -127,15 +127,20 @@ func (r *Registry) ServeA2AIndex(w http.ResponseWriter, req *http.Request) {
 		}
 		type entry struct {
 			ID, Name, URL, Card string
+			Status              string      `json:"status"` // allowed | asks first
+			Always              []string    `json:"always,omitempty"`
 			Skills              []a2a.Skill `json:"skills"`
 		}
+		key := keyFromContext(req.Context())
 		var out []entry
 		for _, t := range ts {
-			if !t.Enabled || t.Kind != TargetKindA2A {
-				continue
+			if !t.Enabled || t.Kind != TargetKindA2A || !store.Visible(req.Context(), r.st, key, t) {
+				continue // hidden by the relationship map: to this caller the agent does not exist
 			}
+			e := entry{ID: t.ID, Name: t.Name}
+			e.Status, e.Always = standingFor(req.Context(), r.st, t, rememberCallerFromContext(req.Context()))
 			base := a2aBase(req) + "/a2a/" + t.ID
-			e := entry{ID: t.ID, Name: t.Name, URL: base, Card: base + a2a.WellKnownPath}
+			e.URL, e.Card = base, base+a2a.WellKnownPath
 			if g, err := r.a2aGateway(req.Context(), t.ID); err == nil {
 				e.Skills = g.upstream.(*a2aUpstream).card.Skills
 			}

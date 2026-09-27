@@ -23,6 +23,8 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 	t.Run("TargetsAdaptersAdvisors", func(t *testing.T) { testTargets(t, open(t)) })
 	t.Run("UsersEntitlements", func(t *testing.T) { testUsersEntitlements(t, open(t)) })
 	t.Run("AgentKeys", func(t *testing.T) { testAgentKeys(t, open(t)) })
+	t.Run("Remembered", func(t *testing.T) { testRemembered(t, open(t)) })
+	t.Run("Relations", func(t *testing.T) { testRelations(t, open(t)) })
 	t.Run("Channels", func(t *testing.T) { testChannels(t, open(t)) })
 	t.Run("OAuth", func(t *testing.T) { testOAuth(t, open(t)) })
 	t.Run("Secrets", func(t *testing.T) { testSecrets(t, open(t)) })
@@ -315,6 +317,118 @@ func testAgentKeys(t *testing.T, s store.Store) {
 	must(t, err)
 	if len(list) != 1 {
 		t.Fatalf("ListAgentKeys = %d, want 1", len(list))
+	}
+}
+
+func testRemembered(t *testing.T, s store.Store) {
+	defer s.Close()
+	if _, err := s.GetRemembered(ctx(), "akey_1", "gh"); err != store.ErrNotFound {
+		t.Fatalf("no row must read as not found, got %v", err)
+	}
+	must(t, s.PutRemembered(ctx(), &store.Remembered{Caller: "akey_1", TargetID: "gh", Scopes: []string{"repo:read"}, CreatedAt: 1, UpdatedAt: 1}))
+	must(t, s.PutRemembered(ctx(), &store.Remembered{Caller: "akey_1", TargetID: "mail", CreatedAt: 2, UpdatedAt: 2}))
+	must(t, s.PutRemembered(ctx(), &store.Remembered{Caller: "akey_2", TargetID: "gh", CreatedAt: 3, UpdatedAt: 3}))
+	if err := s.PutRemembered(ctx(), &store.Remembered{Caller: "", TargetID: "gh"}); err == nil {
+		t.Fatal("a row without a key must be rejected")
+	}
+	p, err := s.GetRemembered(ctx(), "akey_1", "gh")
+	must(t, err)
+	if !p.Allows([]string{"repo:read"}) || p.Allows([]string{"repo:write"}) {
+		t.Fatalf("Allows on a scoped row: %+v", p)
+	}
+	all, err := s.GetRemembered(ctx(), "akey_2", "gh")
+	must(t, err)
+	if !all.Allows([]string{"anything"}) {
+		t.Fatal("an unscoped row must cover every scope")
+	}
+	// upsert replaces
+	must(t, s.PutRemembered(ctx(), &store.Remembered{Caller: "akey_1", TargetID: "gh", Scopes: []string{"repo:write"}, UpdatedAt: 4}))
+	p, _ = s.GetRemembered(ctx(), "akey_1", "gh")
+	if len(p.Scopes) != 1 || p.Scopes[0] != "repo:write" {
+		t.Fatalf("upsert did not replace: %+v", p)
+	}
+	mine, err := s.ListRemembered(ctx(), "akey_1", "")
+	must(t, err)
+	if len(mine) != 2 || mine[0].TargetID != "gh" || mine[1].TargetID != "mail" {
+		t.Fatalf("ListRemembered(akey_1) = %+v", mine)
+	}
+	onGH, _ := s.ListRemembered(ctx(), "", "gh")
+	if len(onGH) != 2 {
+		t.Fatalf("ListRemembered(gh) = %d, want 2", len(onGH))
+	}
+	everyone, _ := s.ListRemembered(ctx(), "", "")
+	if len(everyone) != 3 {
+		t.Fatalf("ListRemembered(all) = %d, want 3", len(everyone))
+	}
+	must(t, s.DeleteRemembered(ctx(), "akey_1", "mail"))
+	must(t, s.DeleteRemembered(ctx(), "akey_1", "mail")) // idempotent
+	if _, err := s.GetRemembered(ctx(), "akey_1", "mail"); err != store.ErrNotFound {
+		t.Fatal("delete did not remove the row")
+	}
+}
+
+func testRelations(t *testing.T, s store.Store) {
+	defer s.Close()
+	if _, err := s.GetRelation(ctx(), "researcher", "librarian"); err != store.ErrNotFound {
+		t.Fatalf("no edge must read as not found, got %v", err)
+	}
+	must(t, s.PutRelation(ctx(), &store.Relation{Agent: "researcher", Target: "librarian", CreatedAt: 1}))
+	must(t, s.PutRelation(ctx(), &store.Relation{Agent: "researcher", Target: "mailer", CreatedAt: 2}))
+	must(t, s.PutRelation(ctx(), &store.Relation{Agent: "assistant", Target: "researcher", CreatedAt: 3}))
+	must(t, s.PutRelation(ctx(), &store.Relation{Agent: "researcher", Target: "librarian", CreatedAt: 9})) // idempotent
+	if err := s.PutRelation(ctx(), &store.Relation{Agent: "x", Target: "x"}); err == nil {
+		t.Fatal("a self edge must be rejected")
+	}
+	if _, err := s.GetRelation(ctx(), "researcher", "librarian"); err != nil {
+		t.Fatalf("edge missing: %v", err)
+	}
+	from, _ := s.ListRelations(ctx(), "researcher", "")
+	if len(from) != 2 || from[0].Target != "librarian" || from[1].Target != "mailer" {
+		t.Fatalf("ListRelations(researcher) = %+v", from)
+	}
+	to, _ := s.ListRelations(ctx(), "", "researcher")
+	if len(to) != 1 || to[0].Agent != "assistant" {
+		t.Fatalf("ListRelations(→researcher) = %+v", to)
+	}
+	all, _ := s.ListRelations(ctx(), "", "")
+	if len(all) != 3 {
+		t.Fatalf("ListRelations(all) = %d, want 3", len(all))
+	}
+	must(t, s.DeleteRelation(ctx(), "researcher", "mailer"))
+	must(t, s.DeleteRelation(ctx(), "researcher", "mailer")) // idempotent
+	if _, err := s.GetRelation(ctx(), "researcher", "mailer"); err != store.ErrNotFound {
+		t.Fatal("delete did not remove the edge")
+	}
+
+	// Visible: both gates, agent-keyed, people always
+	must(t, s.PutTarget(ctx(), &store.Target{ID: "assistant", Kind: "a2a", Enabled: true}))
+	must(t, s.PutTarget(ctx(), &store.Target{ID: "researcher", Kind: "a2a", Enabled: true, Uses: store.UsesListed}))
+	must(t, s.PutTarget(ctx(), &store.Target{ID: "librarian", Kind: "a2a", Enabled: true}))
+	must(t, s.PutTarget(ctx(), &store.Target{ID: "mailer", Kind: "a2a", Enabled: true, Audience: store.AudienceHumans}))
+	must(t, s.PutTarget(ctx(), &store.Target{ID: "web", Kind: "mcp", Enabled: true}))
+	get := func(id string) *store.Target { tt, _ := s.GetTarget(ctx(), id); return tt }
+	human := &store.AgentKey{ID: "akey_h"}
+	as := &store.AgentKey{ID: "akey_a", AgentTargetID: "assistant"}
+	rs := &store.AgentKey{ID: "akey_r", AgentTargetID: "researcher"}
+	cases := []struct {
+		k    *store.AgentKey
+		t    string
+		want bool
+	}{
+		{nil, "mailer", true}, {human, "mailer", true}, {human, "researcher", true},
+		{as, "researcher", true},  // assistant uses everything
+		{rs, "researcher", false}, // never itself
+		{as, "librarian", true},   // assistant uses everything; librarian is not locked
+		{rs, "librarian", true},   // researcher uses only listed; librarian is related
+		{rs, "web", false},        // researcher uses only listed; web is not related
+		{as, "web", true},         // assistant uses everything
+		{as, "mailer", false},     // locked: no agent
+		{rs, "mailer", false},     // locked even for a related agent
+	}
+	for i, c := range cases {
+		if got := store.Visible(ctx(), s, c.k, get(c.t)); got != c.want {
+			t.Errorf("case %d: Visible(%v, %s) = %v, want %v", i, c.k, c.t, got, c.want)
+		}
 	}
 }
 

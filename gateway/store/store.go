@@ -223,7 +223,67 @@ type Target struct {
 	AdvisorID      string
 	Owner          string // user id that owns/operates this target
 	Enabled        bool
+	// Audience is a lock on the target: AudienceEveryone (agents may use it, subject to their
+	// own Uses) or AudienceHumans (no agent, only a person's client — for a server holding
+	// something no agent should touch). Uses is an agent's exposure as a CALLER: what it may
+	// reach (UsesEverything | UsesListed — the latter only targets it has a Relation to). The
+	// relationship map is authored from the agent's side only; "who sees this server" is
+	// derived from it. A person's client always sees everything. Outside its exposure a
+	// target does not exist to the agent: not in its tool list, not on /a2a, refused if called.
+	Audience string
+	Uses     string
+	// Consent is how a permitted caller is asked (ConsentAsk | ConsentRemember | ConsentAllow).
+	Consent string
 }
+
+// Audience values: the lock on a target.
+const (
+	AudienceEveryone = ""       // the default: agents may use it (each subject to its own Uses)
+	AudienceHumans   = "humans" // a person's client only — no agent, whatever its Uses says
+)
+
+// Uses values: an agent's gate as a caller.
+const (
+	UsesEverything = ""       // the default: every target its callees admit it to
+	UsesListed     = "listed" // only the targets it is related to
+)
+
+// Relation is one edge of the relationship map: agent Agent may use target Target. It is
+// authored on the agent's page and bites only when that agent's Uses is listed; "who sees the
+// librarian" is the same edges read the other way. Agents are named by target id, never by
+// key: the relationship is the role's, whichever key the agent presents.
+type Relation struct {
+	Agent     string
+	Target    string
+	CreatedAt int64 // unix ms
+}
+
+// Visible reports whether key k sees target t: the reducer every surface applies (tool list,
+// /a2a index, token verifier, the guarded call). A nil key (auth off, the operator's own
+// stdio) and a person's client (a key not issued to an agent) see everything.
+func Visible(ctx context.Context, s Store, k *AgentKey, t *Target) bool {
+	if k == nil || k.AgentTargetID == "" {
+		return true
+	}
+	if k.AgentTargetID == t.ID {
+		return false // an agent never calls itself through the gateway
+	}
+	if t.Audience == AudienceHumans {
+		return false
+	}
+	if caller, err := s.GetTarget(ctx, k.AgentTargetID); err == nil && caller.Uses == UsesListed {
+		_, err := s.GetRelation(ctx, k.AgentTargetID, t.ID)
+		return err == nil
+	}
+	return true
+}
+
+// Consent values: how a permitted caller is asked.
+const (
+	ConsentAsk      = ""         // the default: a human decides every grant
+	ConsentRemember = "remember" // ask once per caller; the human may say "always" (see Remembered)
+	ConsentAllow    = "allow"    // no prompt for read/write; a spend always asks
+)
 
 // OAuthClient is the per-target OAuth 2.1 client registration: the vendor's authorization and
 // token endpoints, our client_id, an optional pointer to the sealed client_secret (empty for
@@ -338,6 +398,44 @@ type AgentKey struct {
 	// Display/advisory only: a parentless call from such a key is flagged in the consent prompt
 	// ("a registered agent, no parent task given"); it never widens or narrows authority.
 	AgentTargetID string
+}
+
+// Key policy modes: what a given agent key may do on a given target without asking.
+// Remembered is a human's "always" for ONE caller on ONE target: the scopes that caller may
+// use there without being asked again (empty = every scope the target offers). Caller is the
+// agent's target id when an agent asked — the decision is the role's, whichever key it holds —
+// and the key id when a person's client asked. It exists only because a human ticked "always"
+// on a consent, and the target's page lists and forgets them. A call outside Scopes still asks.
+type Remembered struct {
+	Caller    string
+	TargetID  string
+	Scopes    []string
+	Reason    string // display: how the row came to be ("always, from a console approval")
+	CreatedAt int64  // unix ms
+	UpdatedAt int64  // unix ms
+}
+
+// Allows reports whether the remembered decision covers all of scopes.
+func (p *Remembered) Allows(scopes []string) bool {
+	if p == nil {
+		return false
+	}
+	if len(p.Scopes) == 0 {
+		return true
+	}
+	for _, s := range scopes {
+		found := false
+		for _, a := range p.Scopes {
+			if a == s {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // ChannelConnection binds a user to an out-of-band approval surface (a telegram chat; later
@@ -456,6 +554,18 @@ type Store interface {
 	// SetAgentKeyConsentChannels replaces the key's consent-channel policy (nil/empty = auto).
 	// The only mutable key field besides revocation/touch — keys are otherwise create-only.
 	SetAgentKeyConsentChannels(ctx context.Context, id string, channels []string) error
+
+	// remembered "always" decisions (caller × target → scopes that no longer ask)
+	PutRemembered(ctx context.Context, p *Remembered) error                             // upsert on (caller, target)
+	GetRemembered(ctx context.Context, caller, targetID string) (*Remembered, error)    // ErrNotFound = nothing remembered
+	ListRemembered(ctx context.Context, caller, targetID string) ([]*Remembered, error) // "" on either = any
+	DeleteRemembered(ctx context.Context, caller, targetID string) error                // idempotent
+
+	// relationship map (agent → target edges; see Relation and Visible)
+	PutRelation(ctx context.Context, rel *Relation) error                         // idempotent
+	GetRelation(ctx context.Context, agent, target string) (*Relation, error)     // ErrNotFound = no edge
+	ListRelations(ctx context.Context, agent, target string) ([]*Relation, error) // "" on either = any
+	DeleteRelation(ctx context.Context, agent, target string) error               // idempotent
 
 	// channel connections (user × kind → out-of-band approval destination)
 	PutChannelConnection(ctx context.Context, c *ChannelConnection) error // upsert on (user, kind)

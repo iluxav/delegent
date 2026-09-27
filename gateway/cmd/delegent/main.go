@@ -28,7 +28,8 @@ commands:
   serve                        serve the gateway over HTTP (/mcp + /admin)
   stdio                        serve the gateway over stdin/stdout (MCP stdio transport)
   dashboard                    terminal dashboard: policy, scopes, keys, audit, live approvals
-  target add|list|enable|disable   manage fronted MCP targets
+  target add|list|enable|disable|access|remembered   manage fronted targets (MCP servers and agents)
+  relation list|add|rm         the relationship map: which agent may use which target
   key mint|list|revoke         manage agent keys
   approvals [approve|deny]     list / resolve pending consent asks (talks to a running serve)
   telegram setup|link          configure telegram approvals (talks to a running serve)
@@ -55,6 +56,8 @@ func main() {
 		err = cmdDashboard(os.Args[2:])
 	case "target":
 		err = cmdTarget(os.Args[2:])
+	case "relation":
+		err = cmdRelation(os.Args[2:])
 	case "key":
 		err = cmdKey(os.Args[2:])
 	case "approvals":

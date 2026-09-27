@@ -129,6 +129,7 @@ type PendingView struct {
 	OverAskWarnings []string    `json:"over_ask_warnings,omitempty"`
 	TTLOptions      []ttlOption `json:"ttl_options"`     // the grant-lifetime choices the console offers
 	TTLDefaultMin   int         `json:"ttl_default_min"` // pre-selected option, in minutes
+	CanRemember     bool        `json:"can_remember"`    // the target asks once per caller: offer "always"
 	CreatedAt       int64       `json:"created_at"`
 	ExpiresAt       int64       `json:"expires_at"`
 }
@@ -209,6 +210,7 @@ func (g *Gateway) pendingView(pc pendingConsent) PendingView {
 		OverAskWarnings: cr.OverAskWarnings,
 		TTLOptions:      ttlOptions(),
 		TTLDefaultMin:   ttlDefault().Minutes,
+		CanRemember:     g.access.Consent == store.ConsentRemember && pc.KeyID != "",
 		CreatedAt:       pc.CreatedAt, ExpiresAt: pc.ExpiresAt,
 	}
 }
@@ -232,6 +234,7 @@ type consoleDecision struct {
 	granted    []string
 	ttlMinutes int
 	budgetUSD  float64
+	always     bool // also remember the decision for the asking key on this target
 }
 
 // ResolvePending applies a human's console decision to pending id: it burns the nonce (no
@@ -259,6 +262,9 @@ func (g *Gateway) ResolvePending(id string, d consoleDecision) (ok, granted bool
 	granted, message = g.mintPending(pc, answer)
 	if granted {
 		g.finalizeConsentRow(id, "approved", answer.Granted, answer.TTLMinutes, answer.BudgetUSD)
+		if d.always && pc.KeyID != "" && g.access.Consent == store.ConsentRemember {
+			g.rememberAlwaysFor(context.Background(), pc.KeyID, answer.Granted, "always, from a console approval")
+		}
 	} else {
 		g.finalizeConsentRow(id, "denied", nil, 0, 0)
 	}
@@ -317,8 +323,9 @@ func (g *Gateway) blockOnConsole(ctx context.Context, connID, label, reason stri
 	// live view (console card) and the durable row (approvals history, telegram) — parity.
 	g.pending.setDisplay(pc.ID, displayHeadline, meta.Intent)
 	_, keyName, _ := keyIdentityFromContext(ctx)
-	g.pending.setCaller(pc.ID, caller, label, keyName)
-	pc.Headline, pc.Intent, pc.Caller, pc.Label, pc.Key = displayHeadline, meta.Intent, caller, label, keyName
+	keyID := rememberCallerFromContext(ctx) // the agent's id, or a person's key id
+	g.pending.setCaller(pc.ID, caller, label, keyName, keyID)
+	pc.Headline, pc.Intent, pc.Caller, pc.Label, pc.Key, pc.KeyID = displayHeadline, meta.Intent, caller, label, keyName, keyID
 	g.pending.setWaiting(pc.ID, true)
 	view := g.pendingView(pc)
 	g.persistPending(pc, view.AgentName)
