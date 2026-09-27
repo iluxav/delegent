@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 185 32" fill="currentColor" shape-rendering="crispEdges" role="img" aria-labelledby="title desc">
+  <title id="title">Delegent</title>
+  <desc id="desc">A pixel gateway around a diamond, with a custom block-letter wordmark.</desc>
+  <defs>
+    <!-- Shared by the dashboard. The mark uses a 16 by 16 grid; letters use a 5 by 7 grid. -->
+    <g id="mark" stroke="none">
+      <path d="M1 2h4v2H3v8h2v2H1V2Zm10 0h4v12h-4v-2h2V4h-2V2Z"/>
+      <path fill="var(--logo-core, currentColor)" fill-rule="evenodd" d="M7 5h2v1h1v1h1v2h-1v1H9v1H7v-1H6V9H5V7h1V6h1ZM7 7v2h2V7Z"/>
+    </g>
+    <g id="wordmark" stroke="none"><path d="M0 0h4v1h-4ZM0 1h1v1h-1ZM4 1h1v1h-1ZM0 2h1v1h-1ZM4 2h1v1h-1ZM0 3h1v1h-1ZM4 3h1v1h-1ZM0 4h1v1h-1ZM4 4h1v1h-1ZM0 5h1v1h-1ZM4 5h1v1h-1ZM0 6h4v1h-4ZM6 0h5v1h-5ZM6 1h1v1h-1ZM6 2h1v1h-1ZM6 3h4v1h-4ZM6 4h1v1h-1ZM6 5h1v1h-1ZM6 6h5v1h-5ZM12 0h1v1h-1ZM12 1h1v1h-1ZM12 2h1v1h-1ZM12 3h1v1h-1ZM12 4h1v1h-1ZM12 5h1v1h-1ZM12 6h5v1h-5ZM18 0h5v1h-5ZM18 1h1v1h-1ZM18 2h1v1h-1ZM18 3h4v1h-4ZM18 4h1v1h-1ZM18 5h1v1h-1ZM18 6h5v1h-5ZM25 0h3v1h-3ZM24 1h1v1h-1ZM28 1h1v1h-1ZM24 2h1v1h-1ZM24 3h1v1h-1ZM26 3h3v1h-3ZM24 4h1v1h-1ZM28 4h1v1h-1ZM24 5h1v1h-1ZM28 5h1v1h-1ZM25 6h3v1h-3ZM30 0h5v1h-5ZM30 1h1v1h-1ZM30 2h1v1h-1ZM30 3h4v1h-4ZM30 4h1v1h-1ZM30 5h1v1h-1ZM30 6h5v1h-5ZM36 0h1v1h-1ZM40 0h1v1h-1ZM36 1h2v1h-2ZM40 1h1v1h-1ZM36 2h2v1h-2ZM40 2h1v1h-1ZM36 3h1v1h-1ZM38 3h1v1h-1ZM40 3h1v1h-1ZM36 4h1v1h-1ZM39 4h2v1h-2ZM36 5h1v1h-1ZM39 5h2v1h-2ZM36 6h1v1h-1ZM40 6h1v1h-1ZM42 0h5v1h-5ZM44 1h1v1h-1ZM44 2h1v1h-1ZM44 3h1v1h-1ZM44 4h1v1h-1ZM44 5h1v1h-1ZM44 6h1v1h-1Z"/></g>
+  </defs>
+  <use href="#mark" transform="scale(2)" color="#d18a66" style="--logo-core: #f2e9e1"/>
+  <use href="#wordmark" transform="translate(44 5) scale(3)" color="#f2e9e1"/>
+</svg>

@@ -1,0 +1,28 @@
+{{define "relationshipsPage"}}
+<div class="workspace-page relationships-page" data-page="relationships">
+  <header class="page-heading"><div><span class="eyebrow">ACCESS &amp; PERMISSIONS</span><h1>Relationships</h1><p>See how your agents connect. Follow their access to other agents and servers, then open a connection to adjust its rules.</p></div><span class="page-icon">{{template "iconShield"}}</span></header>
+  <dl class="page-metrics">
+    <div><dt>Enabled agents</dt><dd>{{.Agents}}<span>ready to delegate</span></dd></div>
+    <div><dt>Enabled servers</dt><dd>{{.Servers}}<span>connected tools</span></dd></div>
+    <div><dt>Saved relationships</dt><dd>{{len .Edges}}<span>configured connections</span></dd></div>
+  </dl>
+  <section class="map-panel" aria-labelledby="relationship-map-title">
+    <div class="panel-title-row"><div><h2 id="relationship-map-title">Access map</h2><p>Arrows show permitted access. Each node shows when approval is requested.</p></div><span class="panel-hint">Select a node to manage access {{template "iconArrow"}}</span></div>
+    <div class="access-graph-stage relationship-stage" tabindex="0" role="region" aria-label="Relationship map; scroll horizontally to explore">{{.Graph}}</div>
+    <div class="map-footer"><ul class="access-graph-legend"><li><span class="ag-key ag-key-you"></span>You</li><li><span class="ag-key ag-key-agent"></span>Agent</li><li><span class="ag-key ag-key-mcp"></span>Server</li></ul><span>Your own clients can access every server.</span></div>
+  </section>
+  <section class="relationships-list" aria-labelledby="relationships-list-title">
+    <div class="panel-title-row"><div><h2 id="relationships-list-title">Configured connections <span class="count">{{len .Edges}}</span></h2><p>Each tick under an agent’s “what it can use” is one connection. It takes effect once that agent is set to “only these”; a locked server ignores them.</p></div></div>
+    {{if .Edges}}
+    <div class="relationship-table-wrap"><table class="relationship-table"><thead><tr><th scope="col">Agent</th><th scope="col"><span class="sr-only">Direction</span></th><th scope="col">Can use</th><th scope="col">Access rule</th></tr></thead><tbody>
+      {{range .Edges}}<tr>
+        <td><a class="relationship-entity" href="/targets/{{.Agent}}/access" hx-get="/targets/{{.Agent}}/access" hx-target="#main" hx-push-url="true"><span class="entity-icon">{{template "iconActivity"}}</span><span>{{.AgentName}}<small>{{.Agent}}</small></span></a></td>
+        <td class="relationship-direction" aria-label="may use">→</td>
+        <td><a class="relationship-entity" href="/targets/{{.Target}}/access" hx-get="/targets/{{.Target}}/access" hx-target="#main" hx-push-url="true"><span class="entity-icon">{{template "iconServer"}}</span><span>{{.TargetName}}<small>{{.Target}}</small></span></a></td>
+        <td class="relationship-rule">{{.Effect}}</td>
+      </tr>{{end}}
+    </tbody></table></div>
+    {{else}}<div class="page-empty"><span class="empty-symbol">{{template "iconShield"}}</span><div><h3>No saved relationships yet</h3><p>Open an agent’s Access tab and choose what it can use. Until then every agent sees everything that is not locked.</p></div><a class="btn" href="/" hx-get="/" hx-target="#main" hx-push-url="true">View servers {{template "iconArrow"}}</a></div>{{end}}
+  </section>
+</div>
+{{end}}
