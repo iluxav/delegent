@@ -165,7 +165,24 @@
 <input type="hidden" id="pkn" name="known" value="{{.ConsentSig}}">
 {{/* Guarded, not `with index .Live 0`: indexing an empty list errors, the handler 500s, and
      htmx ignores error responses — which would leave a decided modal on screen forever. */}}
-{{if .Live}}
+{{if .Question}}{{with .Question}}
+<div class="consent-overlay">
+  <form hx-post="/questions/{{.ID}}" hx-target="#consentpop" hx-swap="innerHTML"
+        class="consent-dialog question-dialog w-full max-w-lg rounded-lg border bg-panel p-5" role="dialog" aria-modal="true" aria-label="Agent question" tabindex="-1">
+    <p class="text-xs text-ink-soft">An agent has a question for you</p>
+    {{if $.Error}}<p class="mt-2 rounded-md bg-bad-soft px-3 py-2 text-bad">{{$.Error}}</p>{{end}}
+    <div class="mt-2 flex flex-wrap items-baseline gap-2"><span class="pill bg-accent-soft text-accent">question</span><span class="text-xs text-ink-soft">{{.Asker}}</span></div>
+    <p class="question-text">{{.Text}}</p>
+    {{if .Why}}<p class="mt-2 text-xs text-ink-soft"><span class="text-ink-faint">Why:</span> {{.Why}}</p>{{end}}
+    {{if .Choices}}<div class="question-choices">{{range .Choices}}<button class="btn" type="submit" name="choice" value="{{.}}">{{.}}</button>{{end}}</div>{{end}}
+    <label class="mt-4 block text-xs font-medium" for="question-answer">{{if .Choices}}Or write your own answer{{else}}Your answer{{end}}</label>
+    <textarea class="input mt-2 min-h-20" id="question-answer" name="answer" maxlength="4000" placeholder="Tell the agent what to do"></textarea>
+    <p class="mt-2 text-[11px] leading-relaxed text-ink-faint">Your answer goes to the agent as your instruction and is kept in the activity log. It grants no access, and never paste passwords, keys or tokens here.</p>
+    <div class="mt-4 flex flex-wrap items-center gap-3"><button class="btn btn-primary" type="submit" name="action" value="answer">Send answer</button><button class="btn" type="submit" name="action" value="skip" formnovalidate>Let it decide</button></div>
+    {{$n := add (len $.Live) (len $.Questions)}}{{if gt $n 1}}<p class="mt-3 text-xs text-ink-faint">{{$n}} waiting on you. The next appears after this one.</p>{{end}}
+  </form>
+</div>
+{{end}}{{else if .Live}}
 {{$ask := index .Live 0}}
 <div class="consent-overlay">
   <form hx-post="/consents/{{$ask.ID}}" hx-target="#consentpop" hx-swap="innerHTML"
@@ -174,7 +191,7 @@
     <p class="text-xs text-ink-soft">An agent is waiting on you</p>
     {{if .Error}}<p class="mt-2 rounded-md bg-bad-soft px-3 py-2 text-bad">{{.Error}}</p>{{end}}
     {{template "consentBody" $ask}}
-    {{if gt (len .Live) 1}}<p class="mt-3 text-xs text-ink-faint">{{len .Live}} asks waiting — the next appears after you decide this one.</p>{{end}}
+    {{$n := add (len .Live) (len .Questions)}}{{if gt $n 1}}<p class="mt-3 text-xs text-ink-faint">{{$n}} waiting on you. The next appears after you decide this one.</p>{{end}}
   </form>
 </div>
 {{end}}

@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1190,12 +1191,33 @@ func unionScopes(a, b []string) []string {
 	return out
 }
 
+// runContextID is the A2A conversation of one run with this target: every call of the run
+// (its root session and every session under it) to this agent shares it, so an agent that
+// remembers conversations sees the run's earlier requests, and no other run's. It is derived
+// from the root session and the target, hashed so the agent learns neither, and so no caller
+// can name another run's conversation. "" outside a run (no session, or no store).
+func (g *Gateway) runContextID(ctx context.Context, handle string) string {
+	if handle == "" || g.st == nil {
+		return ""
+	}
+	root := handle
+	for i := 0; i < 32; i++ {
+		ss, err := g.st.GetSession(ctx, root)
+		if err != nil || ss.ParentHandle == "" {
+			break
+		}
+		root = ss.ParentHandle
+	}
+	sum := sha256.Sum256([]byte("delegent-run-context\x00" + root + "\x00" + g.targetID))
+	return "run-" + hex.EncodeToString(sum[:16])
+}
+
 // forward calls the upstream vendor tool and returns its own result transparently. It is also
 // the single choke point for the tool_response activity-log event: a real upstream transport
 // failure logs one `error` event; any answered call (even a vendor-side IsError result) logs one
 // `tool_response`, so a failure is never double-logged.
 func (g *Gateway) forward(ctx context.Context, connID, handle, name string, args map[string]any) (*mcp.CallToolResult, error) {
-	res, err := g.upstream.Call(ctx, UpstreamCall{Name: name, Args: args, Session: handle})
+	res, err := g.upstream.Call(ctx, UpstreamCall{Name: name, Args: args, Session: handle, ContextID: g.runContextID(ctx, handle)})
 	base := g.eventBase(ctx, connID)
 	base.Tool = name
 	if err != nil {

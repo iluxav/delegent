@@ -41,6 +41,9 @@ type UpstreamCall struct {
 	Name    string
 	Args    map[string]any
 	Session string
+	// ContextID, when set, is the A2A conversation every call of this run to this agent
+	// shares (see runContextID); it replaces any context_id the caller passed.
+	ContextID string
 }
 
 // --- MCP ---
@@ -130,7 +133,7 @@ func skillSchema(sk a2a.Skill) map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"message":    map[string]any{"type": "string", "description": desc},
-			"context_id": map[string]any{"type": "string", "description": "To follow up on an earlier reply from this agent (\"now email that to bob\", \"shorten it\"), pass the context_id that reply ended with; the agent then sees the earlier turns. Leave it out for a new request."},
+			"context_id": map[string]any{"type": "string", "description": "To follow up on an earlier reply from this agent (\"now email that to bob\", \"shorten it\"), pass the context_id that reply ended with; the agent then sees the earlier turns. Leave it out for a new request. Inside a Delegent run this is automatic: every request of the run to this agent is one conversation."},
 		},
 		"required": []string{"message"},
 	}
@@ -198,7 +201,11 @@ func (u *a2aUpstream) Call(ctx context.Context, c UpstreamCall) (*mcp.CallToolRe
 		if msg == "" {
 			return toolError("'" + c.Name + "' needs a message"), nil
 		}
-		key := c.Session + "|" + sk.ID + "|" + str("context_id") + "|" + msg
+		contextID := str("context_id")
+		if c.ContextID != "" {
+			contextID = c.ContextID
+		}
+		key := c.Session + "|" + sk.ID + "|" + contextID + "|" + msg
 		if taskID := u.running(key); taskID != "" {
 			// The same request is already being worked: attach to it rather than start twice.
 			progress("re-attached to the running task " + taskID)
@@ -206,7 +213,7 @@ func (u *a2aUpstream) Call(ctx context.Context, c UpstreamCall) (*mcp.CallToolRe
 		} else {
 			// Start the task without waiting, and remember it before polling, so a stopped run
 			// can cancel it from its first moment (see cancelSessions).
-			res, err = u.client.Send(ctx, msg, a2a.SendOpts{Skill: sk.ID, ContextID: str("context_id"), Session: c.Session, NoWait: true})
+			res, err = u.client.Send(ctx, msg, a2a.SendOpts{Skill: sk.ID, ContextID: contextID, Session: c.Session, NoWait: true})
 			if err == nil && res != nil && res.TaskID != "" && !a2a.Terminal(res.State) && !a2a.NeedsCaller(res.State) {
 				u.remember(key, res)
 				res, err = u.client.Wait(ctx, res.TaskID, c.Session, progress)
@@ -303,6 +310,47 @@ func (g *Gateway) CancelAgentTask(ctx context.Context, taskID, session string) e
 		return fmt.Errorf("task %s is %s, not canceled", taskID, res.State)
 	}
 	return nil
+}
+
+// AgentTask is a task an agent target is working on, as the gateway started it.
+type AgentTask struct {
+	TaskID, Session, Skill, Message string
+	StartedAt                       int64 // unix ms
+}
+
+// RunningAgentTasks lists the tasks this agent target started for any of the given sessions
+// and has not yet seen finish: a task is known here from its first moment, before any reply
+// (and so before the activity log) carries its id.
+func (g *Gateway) RunningAgentTasks(sessions map[string]bool) []AgentTask {
+	u, ok := g.upstream.(*a2aUpstream)
+	if !ok {
+		return nil
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var out []AgentTask
+	for key, t := range u.inflight {
+		parts := strings.SplitN(key, "|", 4)
+		if len(parts) != 4 || !sessions[parts[0]] || time.Since(t.startedAt) > inflightTTL {
+			continue
+		}
+		out = append(out, AgentTask{TaskID: t.taskID, Session: parts[0], Skill: parts[1], Message: parts[3], StartedAt: t.startedAt.UnixMilli()})
+	}
+	return out
+}
+
+// AgentTaskStatus asks the agent this target fronts where one of its tasks stands: its state
+// and its latest word (the status note of a running task, or the result of a finished one).
+func (g *Gateway) AgentTaskStatus(ctx context.Context, taskID, session string) (state, text string, err error) {
+	u, ok := g.upstream.(*a2aUpstream)
+	if !ok {
+		return "", "", errors.New("not an agent target")
+	}
+	res, err := u.client.GetTask(ctx, taskID, session)
+	if err != nil {
+		return "", "", err
+	}
+	return res.State, res.Text, nil
 }
 
 // cancelSessions cancels, on the agent, every task this upstream started for a call made under

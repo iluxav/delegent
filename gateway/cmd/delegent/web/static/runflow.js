@@ -45,12 +45,17 @@
       this.stage = root.querySelector('[data-flow-stage]');
       this.view = { x: 0, y: 0, w: 720, h: 360 }; // the viewBox: pan by moving x/y, zoom by scaling w/h
       this.content = { w: 720, h: 360 };
+      this.panel = root.querySelector('[data-flow-inspector]');
+      this.inspecting = -1;
+      this.inspectData = null;
+      this.panel?.addEventListener('click', (e) => this.onPanelClick(e));
       this.installPanZoom();
       this.poll();
       this.timer = setInterval(() => this.poll(), 1000);
+      this.inspectTimer = setInterval(() => { if (this.inspecting >= 0) this.loadInspect(); }, 2000);
       const stop = () => {
         if (!document.body.contains(root)) {
-          clearInterval(this.timer);
+          clearInterval(this.timer); clearInterval(this.inspectTimer);
           this.resizeObserver.disconnect();
           document.body.removeEventListener('htmx:afterSwap', stop);
         }
@@ -92,8 +97,9 @@
       for (let i = this.played; i < state.rows.length; i++) this.queue.push({ index: i, row: state.rows[i] });
       this.played = state.rows.length;
       // an ask that was pending and is now settled stops pulsing without a new row
-      for (const n of this.nodes) if (n.state === 'waiting' && !state.rows.some((r) => r.kind === 'ask' && r.pending && r.from === n.index)) this.setState(n.index, this.open.get(n.index) ? 'working' : 'idle');
+      for (const n of this.nodes) if (n.state === 'waiting' && !state.rows.some((r) => (r.kind === 'ask' || r.kind === 'question') && r.pending && r.from === n.index)) this.setState(n.index, this.open.get(n.index) ? 'working' : 'idle');
       this.noteEl.textContent = state.rows.length + ' steps · live';
+      if (this.inspecting >= 0) this.renderPanel();
       this.drain();
     }
 
@@ -109,7 +115,8 @@
       let drag = null;
       svg.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
-        drag = { x: e.clientX, y: e.clientY, vx: this.view.x, vy: this.view.y };
+        const hit = e.target.closest?.('[data-node]');
+        drag = { x: e.clientX, y: e.clientY, vx: this.view.x, vy: this.view.y, node: hit ? Number(hit.dataset.node) : -1 };
         svg.setPointerCapture(e.pointerId);
         svg.classList.add('is-dragging');
       });
@@ -120,7 +127,13 @@
         this.view.y = drag.vy - (e.clientY - drag.y) * scale;
         this.applyView();
       });
-      const end = (e) => { if (drag) { drag = null; svg.classList.remove('is-dragging'); } };
+      const end = (e) => {
+        if (!drag) return;
+        // A press that did not move is a click: on a box, it opens that participant's panel.
+        const still = Math.abs(e.clientX - drag.x) < 4 && Math.abs(e.clientY - drag.y) < 4;
+        if (e.type === 'pointerup' && still && drag.node >= 0) this.inspect(drag.node);
+        drag = null; svg.classList.remove('is-dragging');
+      };
       svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end);
       this.root.querySelectorAll('[data-flow-zoom]').forEach((b) => b.addEventListener('click', () => {
         const mode = b.dataset.flowZoom;
@@ -179,10 +192,12 @@
           : { x: PAD + row.indexOf(i) * (NODE_W + GAP), y: TOP };
         this.nodes[i] = this.drawNode(i, p, pos.x, pos.y);
       });
+      if (this.inspecting >= 0) this.nodes[this.inspecting]?.g.classList.add('is-selected');
     }
 
     drawNode(index, p, x, y) {
-      const g = el('g', { class: `flow-node flow-kind-${p.kind}`, transform: `translate(${x} ${y})` }, this.nodeLayer);
+      const g = el('g', { class: `flow-node flow-kind-${p.kind}`, transform: `translate(${x} ${y})`, 'data-node': index, tabindex: 0, role: 'button', 'aria-label': 'Inspect ' + p.name }, this.nodeLayer);
+      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.inspect(index); } });
       el('title', {}, g).textContent = p.name;
       const box = el('rect', { width: NODE_W, height: NODE_H, rx: 9 }, g);
       const name = el('text', { x: 14, y: 26, class: 'flow-node-name' }, g);
@@ -215,7 +230,7 @@
     }
 
     edge(a, b, kind) {
-      const key = `${a}-${b}-${kind === 'ask' || kind === 'grant' || kind === 'deny' ? 'consent' : 'data'}`;
+      const key = `${a}-${b}-${['ask', 'grant', 'deny', 'question', 'answer'].includes(kind) ? 'consent' : 'data'}`;
       let path = this.edges.get(key);
       if (!path) {
         path = el('path', { d: this.edgePath(a, b, kind), class: 'flow-edge', 'marker-end': 'url(#flow-arrow)' }, this.edgeLayer);
@@ -261,24 +276,42 @@
       if (row.tone) path.classList.add('flow-tone-' + row.tone);
       switch (row.kind) {
         case 'call':
-          if (!/\(retry\)$/.test(row.label)) this.open.set(row.to, (this.open.get(row.to) || 0) + 1);
+          this.open.set(row.to, (this.open.get(row.to) || 0) + 1);
           this.setState(row.to, 'working'); this.setData(row.to, '← ' + row.text);
           if (this.nodes[row.from].kind !== 'you') this.setState(row.from, 'working');
           break;
-        case 'ask':
+        case 'ask': {
+          // The call that asked is parked, not running: the target is not working on it.
+          const t = this.state.participants.findIndex((p) => p.name === row.target);
+          if (t >= 0 && (this.open.get(t) || 0) > 0) {
+            this.open.set(t, this.open.get(t) - 1);
+            if (!this.stillWorking(t)) this.setState(t, 'idle');
+          }
           this.setState(row.from, row.pending ? 'waiting' : 'working'); this.setState(row.to, row.pending ? 'deciding' : 'idle');
           this.setData(row.to, row.label);
           break;
+        }
         case 'grant':
           this.setState(row.from, 'idle'); this.setState(row.to, 'working'); this.setData(row.to, 'approved: ' + row.text);
           break;
         case 'deny':
           this.setState(row.from, 'idle'); this.setState(row.to, 'refused'); this.setData(row.to, 'denied: ' + row.text);
           break;
+        case 'question':
+          this.setState(row.from, row.pending ? 'waiting' : 'working'); this.setState(row.to, row.pending ? 'deciding' : 'idle');
+          this.setData(row.to, 'question: ' + row.text);
+          break;
+        case 'answer':
+          this.setState(row.from, 'idle'); this.setState(row.to, 'working'); this.setData(row.to, row.label + ': ' + row.text);
+          break;
         case 'stop':
           this.open.clear();
           for (const n of this.nodes) if (n.kind !== 'you') this.setState(n.index, 'refused');
           this.setData(row.to, 'stopped');
+          break;
+        case 'stop_agent':
+          this.open.set(row.to, 0);
+          this.setState(row.to, 'refused'); this.setData(row.to, 'stopped by you');
           break;
         case 'reply': case 'error': {
           const left = Math.max(0, (this.open.get(row.from) || 1) - 1);
@@ -327,6 +360,123 @@
       li.children[2].lastChild.textContent = row.full || '';
       if (!row.full) li.children[2].lastChild.remove();
       this.feed.prepend(li);
+    }
+
+    // --- the inspector: click a box to see what that participant was asked, what it did in
+    // this run, and (for an agent) where its tasks stand now, with a stop for them ---
+    inspect(i) {
+      if (!this.panel || !this.state) return;
+      this.nodes.forEach((n) => n.g.classList.toggle('is-selected', n.index === i));
+      this.inspecting = i; this.inspectData = null; this.confirming = false; this.stopNote = '';
+      this.panel.hidden = false;
+      this.renderPanel();
+      this.loadInspect();
+    }
+    closeInspector() {
+      this.inspecting = -1; this.inspectData = null;
+      if (this.panel) this.panel.hidden = true;
+      this.nodes.forEach((n) => n.g.classList.remove('is-selected'));
+    }
+    async loadInspect() {
+      const i = this.inspecting;
+      const p = this.state?.participants[i];
+      if (!p || p.kind === 'you') return;
+      try {
+        const res = await fetch(this.url.replace(/\/state$/, '/agents/') + encodeURIComponent(p.name), { headers: { Accept: 'application/json' } });
+        if (!res.ok || this.inspecting !== i) return;
+        this.inspectData = await res.json();
+        this.renderPanel();
+      } catch (e) { /* the next tick tries again */ }
+    }
+    onPanelClick(e) {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.inspectorClose !== undefined) return this.closeInspector();
+      if (b.dataset.inspectorStop === undefined) return;
+      if (!this.confirming) { this.confirming = true; return this.renderPanel(); }
+      this.stopAgent();
+    }
+    async stopAgent() {
+      const p = this.state.participants[this.inspecting];
+      this.confirming = false; this.stopNote = 'Stopping…'; this.renderPanel();
+      try {
+        const res = await fetch(this.url.replace(/\/state$/, '/agents/') + encodeURIComponent(p.name) + '/stop', { method: 'POST', headers: { 'HX-Request': 'true', Accept: 'application/json' } });
+        const out = res.ok ? await res.json() : null;
+        this.stopNote = out ? (out.canceled === 1 ? '1 task cancelled.' : out.canceled + ' tasks cancelled.') : 'Could not stop it.';
+      } catch (e) { this.stopNote = 'Could not reach the gateway.'; }
+      this.renderPanel(); this.loadInspect(); this.poll();
+    }
+    renderPanel() {
+      const i = this.inspecting, panel = this.panel;
+      const p = this.state?.participants[i];
+      if (!panel || !p) return;
+      const kindName = p.kind === 'you' ? 'operator' : p.kind === 'harness' ? 'client · key' : 'agent · target';
+      const n = this.nodes[i];
+      const h = (tag, cls, text, parent) => { const x = document.createElement(tag); if (cls) x.className = cls; if (text != null) x.textContent = text; parent?.appendChild(x); return x; };
+      const keepScroll = panel.querySelector('.flow-inspector-body')?.scrollTop || 0;
+      panel.innerHTML = '';
+      const head = h('div', 'flow-inspector-head', null, panel);
+      const title = h('div', null, null, head);
+      h('strong', null, p.name, title);
+      // The box's state is read from the log; a task the agent still reports live says more.
+      const live = (this.inspectData?.tasks || []).filter((t) => t.live && !['completed', 'failed', 'canceled', 'rejected'].includes(t.state)).length;
+      h('span', null, kindName + ' · ' + (live ? (live === 1 ? '1 task running' : live + ' tasks running') : (n?.state || 'idle')), title);
+      const close = h('button', 'btn flow-inspector-close', '×', head);
+      close.type = 'button'; close.dataset.inspectorClose = ''; close.setAttribute('aria-label', 'Close');
+      const body = h('div', 'flow-inspector-body', null, panel);
+
+      const d = this.inspectData;
+      if (p.kind !== 'you') {
+        const sec = h('section', 'flow-inspector-section', null, body);
+        h('h4', null, d?.agent ? 'Tasks in this run' : 'Asked in this run', sec);
+        if (!d) h('p', 'flow-inspector-empty', 'Loading…', sec);
+        else if (d.agent && d.tasks.length) {
+          for (const t of d.tasks.slice().reverse()) {
+            const card = h('div', 'flow-task', null, sec);
+            const top = h('div', 'flow-task-top', null, card);
+            const tone = { completed: 'ok', failed: 'bad', canceled: 'bad', rejected: 'bad', 'input-required': 'warn', 'auth-required': 'warn' }[t.state] || '';
+            h('span', 'flow-task-state' + (tone ? ' flow-tone-' + tone : ''), (t.state || 'unknown') + (t.live ? ' · live' : ''), top);
+            h('span', 'flow-task-by', 'from ' + (t.asked_by || 'the client'), top);
+            if (t.asked) { h('span', 'flow-task-label', 'Asked', card); h('pre', null, t.asked, card); }
+            if (t.latest) { h('span', 'flow-task-label', t.state === 'completed' ? 'Result' : 'Latest', card); h('pre', null, t.latest, card); }
+          }
+        } else {
+          const asked = this.state.rows.filter((r) => r.kind === 'call' && r.to === i);
+          if (!asked.length) h('p', 'flow-inspector-empty', d?.agent ? 'No task yet.' : 'Nothing asked of it yet.', sec);
+          for (const r of asked.slice(-5).reverse()) {
+            const card = h('div', 'flow-task', null, sec);
+            const top = h('div', 'flow-task-top', null, card);
+            h('span', 'flow-task-state', r.label, top);
+            h('span', 'flow-task-by', r.time + ' · from ' + this.state.participants[r.from].name, top);
+            if (r.full) h('pre', null, r.full, card);
+          }
+        }
+        if (d?.stoppable || this.stopNote) {
+          const act = h('div', 'flow-inspector-stop', null, sec);
+          if (d?.stoppable) {
+            const b = h('button', 'btn text-bad' + (this.confirming ? ' is-confirming' : ''), this.confirming ? 'Click again to stop it' : 'Stop this agent', act);
+            b.type = 'button'; b.dataset.inspectorStop = '';
+            h('small', null, this.confirming ? 'Its unfinished tasks are cancelled; whoever waits on it gets them back cancelled. The rest of the run goes on.' : 'Cancels only this agent\'s unfinished tasks.', act);
+          }
+          if (this.stopNote) h('small', 'flow-inspector-note', this.stopNote, act);
+        }
+      }
+
+      const sec = h('section', 'flow-inspector-section', null, body);
+      h('h4', null, 'Activity', sec);
+      const rows = this.state.rows.filter((r) => r.from === i || r.to === i);
+      if (!rows.length) h('p', 'flow-inspector-empty', 'No activity yet.', sec);
+      const ol = h('ol', 'flow-inspector-feed', null, sec);
+      for (const r of rows.slice(-40).reverse()) {
+        const li = h('li', r.tone ? 'run-tone-' + r.tone : '', null, ol);
+        const other = this.state.participants[r.from === i ? r.to : r.from].name;
+        h('span', 'run-flow-time', r.time, li);
+        const what = h('span', null, null, li);
+        h('strong', null, (r.from === i ? '→ ' : '← ') + other + ' · ' + r.label + (r.pending ? ' · waiting' : ''), what);
+        if (r.text) h('span', 'flow-inspector-text', r.text, what);
+        if (r.full && r.full !== r.text) li.title = r.full;
+      }
+      const nb = panel.querySelector('.flow-inspector-body'); if (nb) nb.scrollTop = keepScroll;
     }
 
     replay() {

@@ -31,7 +31,7 @@ type runParticipant struct {
 // runRow is one arrow: something passed from one participant to another.
 type runRow struct {
 	Time    string
-	Kind    string // call | ask | grant | deny | reply | error | stop
+	Kind    string // call | ask | grant | deny | reply | error | stop | stop_agent | question | answer
 	From    int    // participant index
 	To      int
 	Label   string // the short verb: a tool name, "approval?", "approved", "denied", "reply"
@@ -68,7 +68,9 @@ type run struct {
 	pendingCount int
 	openCalls    int
 	badRows      int
+	refusals     int    // of badRows, the ones that were a "no" (a denial, a refused call), not errors
 	stopped      bool   // a human stopped the run
+	questions    int    // questions to the operator still waiting
 	live         bool   // its root session still confers access (set by the page handler)
 	Notice       string // shown once on the run page, after an action on it
 	events       []*store.Event
@@ -231,10 +233,12 @@ func (r *run) layout() {
 	}
 	lastCaller := map[string]string{}
 	open := map[string]int{}
-	// awaiting marks a target whose last call parked on consent: the client's next call of
-	// the same tool is that call retried (the console path never answers the first one), not
-	// a second open call.
+	// A call that needs consent parks on its ask and returns to the caller without running (the
+	// gateway answers it "pending" or "approved, retry"); what runs is the caller's next call,
+	// which gets the reply. So the ask closes the call that raised it. awaiting remembers the
+	// asked-for tool, only to label that next call "(retry)".
 	awaiting := map[string]string{}
+	questionRow := map[string]int{} // question id → its row, settled when the answer comes
 	r.Started = evTime(r.StartedAt)
 	for _, e := range r.events {
 		caller := callerOf(e, lastCaller)
@@ -249,13 +253,10 @@ func (r *run) layout() {
 			from := add(caller, kindOf(caller, r.Harness))
 			to := add(target, "agent")
 			row.Kind, row.From, row.To, row.Label = "call", from, to, e.Tool
-			// Every further call of the tool while its ask is open is the same call retried
-			// (the client re-sends until the grant lands); the reply or refusal closes it.
 			if awaiting[target] == e.Tool {
 				row.Label += " (retry)"
-			} else {
-				open[target]++
 			}
+			open[target]++
 			row.Full = callPayload(e)
 			row.Text = excerpt(row.Full, runTextN)
 			if r.Title == "" {
@@ -267,6 +268,9 @@ func (r *run) layout() {
 		case store.EventPermissionRequested:
 			if e.Tool != "" {
 				awaiting[target] = e.Tool
+				if open[target] > 0 {
+					open[target]-- // the call that asked is parked: it never runs
+				}
 			}
 			if lastCaller[target] == "" {
 				lastCaller[target] = caller
@@ -288,11 +292,14 @@ func (r *run) layout() {
 			row.Full = e.Reason
 			row.Text = excerpt(row.Full, runTextN)
 			r.settle(target)
-			if open[target] > 0 {
+			// A refusal with no ask before it (the relationship map's backstop, an unclassified
+			// tool) ends the call that caused it; after an ask, the ask already did.
+			if awaiting[target] == "" && open[target] > 0 {
 				open[target]--
 			}
 			delete(awaiting, target)
 			r.badRows++
+			r.refusals++
 		case store.EventToolResponse:
 			from := add(target, "agent")
 			to := add(caller, kindOf(caller, r.Harness))
@@ -307,6 +314,41 @@ func (r *run) layout() {
 				open[target]--
 			}
 			delete(awaiting, target)
+		case store.EventQuestionAsked:
+			var p struct {
+				ID       string   `json:"question_id"`
+				Question string   `json:"question"`
+				Choices  []string `json:"choices"`
+			}
+			json.Unmarshal(e.Params, &p)
+			from := add(caller, kindOf(caller, r.Harness))
+			row.Kind, row.From, row.To, row.Label, row.Tone = "question", from, you, "asks you", "warn"
+			row.Full = p.Question
+			if len(p.Choices) > 0 {
+				row.Full += "\n\nChoices: " + strings.Join(p.Choices, " · ")
+			}
+			row.Text = excerpt(p.Question, runTextN)
+			row.Pending = true
+			questionRow[p.ID] = len(r.Rows)
+		case store.EventQuestionAnswered:
+			var res struct {
+				ID     string `json:"question_id"`
+				Status string `json:"status"`
+				Answer string `json:"answer"`
+			}
+			json.Unmarshal(e.Result, &res)
+			to := add(caller, kindOf(caller, r.Harness))
+			row.Kind, row.From, row.To, row.Tone = "answer", you, to, "ok"
+			switch res.Status {
+			case "answered":
+				row.Label, row.Full = "answered", res.Answer
+			default:
+				row.Label, row.Tone, row.Full = res.Status, "bad", e.Reason
+			}
+			row.Text = excerpt(row.Full, runTextN)
+			if i, ok := questionRow[res.ID]; ok {
+				r.Rows[i].Pending = false
+			}
 		case store.EventRunStopped:
 			// You stopped the run: the arrow goes to whoever you started it through.
 			to := you
@@ -319,6 +361,14 @@ func (r *run) layout() {
 			row.Full = e.Reason
 			row.Text = excerpt(row.Full, runTextN)
 			r.stopped = true
+		case store.EventAgentStopped:
+			// You stopped one agent: its calls end (whoever waited on it gets its task back
+			// cancelled); the rest of the run carries on.
+			to := add(target, "agent")
+			row.Kind, row.From, row.To, row.Label, row.Tone, row.Target = "stop_agent", you, to, "stopped "+target, "bad", target
+			row.Full = e.Reason
+			row.Text = excerpt(row.Full, runTextN)
+			open[target] = 0
 		case store.EventError:
 			from := add(target, "agent")
 			to := add(caller, kindOf(caller, r.Harness))
@@ -332,6 +382,9 @@ func (r *run) layout() {
 				open[target]--
 			}
 			r.badRows++
+			if e.Error == "" { // the gateway refused the call (an unclassified tool, …), not an upstream failure
+				r.refusals++
+			}
 		default:
 			continue
 		}
@@ -346,6 +399,9 @@ func (r *run) layout() {
 	for i := range r.Rows {
 		if r.Rows[i].Pending {
 			r.pendingCount++
+			if r.Rows[i].Kind == "question" {
+				r.questions++
+			}
 		}
 	}
 	if r.stopped {
@@ -358,12 +414,16 @@ func (r *run) layout() {
 	switch {
 	case r.stopped:
 		r.Status, r.StatusTone = "stopped", "bad"
+	case r.pendingCount > 0 && r.pendingCount == r.questions:
+		r.Status, r.StatusTone = "waiting for your answer", "warn"
 	case r.pendingCount > 0:
 		r.Status, r.StatusTone = "waiting for your approval", "warn"
 	case r.openCalls > 0:
 		r.Status, r.StatusTone = "running", ""
-	case r.badRows > 0:
+	case r.refusals > 0:
 		r.Status, r.StatusTone = "finished with refusals", "bad"
+	case r.badRows > 0:
+		r.Status, r.StatusTone = "finished with errors", "bad"
 	default:
 		r.Status, r.StatusTone = "done", "ok"
 	}
@@ -664,6 +724,197 @@ func unfinishedTasks(x *run) []gateway.RunTask {
 	return out
 }
 
+// agentTask is one task a run gave an agent, as its log tells it.
+type agentTask struct {
+	TaskID  string `json:"task_id"`
+	State   string `json:"state"`
+	Asked   string `json:"asked"`    // the message that started it
+	AskedBy string `json:"asked_by"` // who sent it
+	At      int64  `json:"at"`
+	Latest  string `json:"latest"` // the agent's last word on it (its reply, or its status note)
+	Live    bool   `json:"live"`   // Latest and State were read from the agent just now
+	session string
+}
+
+// agentTasks lists the tasks a run gave one agent, oldest first: each agent reply carries its
+// task's id and state, and the call it answers carries what the agent was asked. A later
+// reply on the same task (a teammate checking on it) updates its state.
+func agentTasks(x *run, name string) []*agentTask {
+	byID := map[string]*agentTask{}
+	var out []*agentTask
+	var lastAsked, lastBy string
+	lastCaller := map[string]string{}
+	for _, e := range x.events {
+		if e.TargetID != name {
+			continue
+		}
+		switch e.Type {
+		case store.EventToolCall:
+			lastBy = callerOf(e, lastCaller)
+			lastCaller[e.TargetID] = lastBy
+			lastAsked = callPayload(e)
+		case store.EventToolResponse:
+			var res struct {
+				Structured struct {
+					TaskID string `json:"task_id"`
+					State  string `json:"state"`
+				} `json:"structuredContent"`
+			}
+			if len(e.Result) == 0 || json.Unmarshal(e.Result, &res) != nil || res.Structured.TaskID == "" {
+				continue
+			}
+			t := byID[res.Structured.TaskID]
+			if t == nil {
+				t = &agentTask{TaskID: res.Structured.TaskID, Asked: lastAsked, AskedBy: lastBy, At: e.CreatedAt}
+				if t.AskedBy == "" {
+					t.AskedBy = x.Harness
+				}
+				byID[t.TaskID] = t
+				out = append(out, t)
+			}
+			t.State, t.Latest = res.Structured.State, resultPayload(e)
+			if e.SessionHandle != "" {
+				t.session = e.SessionHandle
+			}
+		}
+	}
+	return out
+}
+
+func taskFinished(state string) bool {
+	switch state {
+	case "completed", "failed", "canceled", "rejected":
+		return true
+	}
+	return false
+}
+
+// runSessions is every session a run's events were made under.
+func runSessions(x *run) map[string]bool {
+	out := map[string]bool{x.Root: true}
+	for _, e := range x.events {
+		if e.SessionHandle != "" {
+			out[e.SessionHandle] = true
+		}
+		if e.ParentHandle != "" {
+			out[e.ParentHandle] = true
+		}
+	}
+	return out
+}
+
+// inspectAgent gathers one agent's tasks in a run: those the log tells of, plus those the
+// gateway is still waiting on (a first call's task has no reply in the log yet), with the
+// unfinished ones' state read from the agent. isAgent is false for a target that is not an
+// A2A agent: it has no tasks to read or stop.
+func (w *webApp) inspectAgent(r *http.Request, x *run, name string) (tasks []*agentTask, isAgent bool) {
+	tasks = agentTasks(x, name)
+	t, err := w.e.st.GetTarget(r.Context(), name)
+	if err != nil || t.Kind != gateway.TargetKindA2A {
+		return tasks, false
+	}
+	known := map[string]*agentTask{}
+	for _, t := range tasks {
+		known[t.TaskID] = t
+	}
+	for _, rt := range w.reg.RunningAgentTasks(r.Context(), name, runSessions(x)) {
+		if t := known[rt.TaskID]; t != nil {
+			if t.session == "" {
+				t.session = rt.Session
+			}
+			continue
+		}
+		t := &agentTask{TaskID: rt.TaskID, State: "working", Asked: rt.Message, At: rt.StartedAt, session: rt.Session}
+		t.AskedBy = lastCallerOf(x, name, rt.Message)
+		known[t.TaskID] = t
+		tasks = append(tasks, t)
+	}
+	for _, t := range tasks {
+		if taskFinished(t.State) {
+			continue
+		}
+		if state, text, err := w.reg.AgentTaskStatus(r.Context(), gateway.RunTask{Target: name, TaskID: t.TaskID, Session: t.session}); err == nil && state != "" {
+			t.State, t.Live = state, true
+			if text != "" {
+				t.Latest = text
+			}
+		}
+	}
+	return tasks, true
+}
+
+// lastCallerOf names who last sent an agent this message in the run (the harness if unknown).
+func lastCallerOf(x *run, target, msg string) string {
+	who := ""
+	lastCaller := map[string]string{}
+	for _, e := range x.events {
+		if e.Type != store.EventToolCall || e.TargetID != target {
+			continue
+		}
+		c := callerOf(e, lastCaller)
+		lastCaller[target] = c
+		if messageOf(e.Params) == msg {
+			who = c
+		}
+	}
+	if who == "" {
+		who = x.Harness
+	}
+	return who
+}
+
+// agentInspect is the JSON behind the run page's agent panel: what one agent was asked in
+// the run, and where each of those tasks stands now.
+func (w *webApp) agentInspect(rw http.ResponseWriter, r *http.Request) {
+	x := w.findRun(r, r.PathValue("id"))
+	name := r.PathValue("name")
+	if x == nil {
+		http.NotFound(rw, r)
+		return
+	}
+	tasks, isAgent := w.inspectAgent(r, x, name)
+	stoppable := false
+	for _, t := range tasks {
+		t.Latest = excerpt(t.Latest, 600)
+		if isAgent && !taskFinished(t.State) {
+			stoppable = true
+		}
+	}
+	if tasks == nil {
+		tasks = []*agentTask{}
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	rw.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(rw).Encode(map[string]any{
+		"name": name, "agent": isAgent, "tasks": tasks, "stoppable": stoppable && !x.stopped,
+	})
+}
+
+// stopAgent cancels one agent's unfinished tasks in a run, leaving the rest of the run going.
+func (w *webApp) stopAgent(rw http.ResponseWriter, r *http.Request) {
+	// Only the run page's script posts here, and it marks the request: a cross-site form cannot.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(rw, "forbidden", http.StatusForbidden)
+		return
+	}
+	x := w.findRun(r, r.PathValue("id"))
+	name := r.PathValue("name")
+	if x == nil {
+		http.NotFound(rw, r)
+		return
+	}
+	tasks, _ := w.inspectAgent(r, x, name)
+	var cancel []gateway.RunTask
+	for _, t := range tasks {
+		if !taskFinished(t.State) {
+			cancel = append(cancel, gateway.RunTask{Target: name, TaskID: t.TaskID, Session: t.session})
+		}
+	}
+	n := w.reg.StopAgent(w.e.operator, x.Root, name, cancel)
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(map[string]any{"canceled": n})
+}
+
 func stopNotice(rep gateway.StopReport) string {
 	n := "Run stopped. "
 	if rep.Sessions == 0 {
@@ -676,6 +927,9 @@ func stopNotice(rep gateway.StopReport) string {
 	}
 	if rep.Denied > 0 {
 		n += ", " + plural(rep.Denied, "waiting approval") + " denied"
+	}
+	if rep.Questions > 0 {
+		n += ", " + plural(rep.Questions, "waiting question") + " cancelled"
 	}
 	return n + ". Any agent still working can make no further calls."
 }

@@ -188,6 +188,7 @@ func newAggregate(ctx context.Context, r *Registry, userID, keyID string) (*Aggr
 	}
 
 	a.addEntryTools(s)
+	a.addQuestionTool(s)
 	a.builtAt = time.Now()
 	a.server = s
 	a.handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil)

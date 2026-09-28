@@ -86,6 +86,13 @@ func TestCancelSessionsStopsTheRunsAgentTasks(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
+	gw := &Gateway{upstream: up}
+	if got := gw.RunningAgentTasks(map[string]bool{"sess_engineer": true}); len(got) != 1 || got[0].TaskID != "task-1" || got[0].Message != "build it" || got[0].Skill != "build_feature" {
+		t.Errorf("running tasks = %+v", got)
+	}
+	if got := gw.RunningAgentTasks(map[string]bool{"sess_other": true}); len(got) != 0 {
+		t.Errorf("another run's view = %+v", got)
+	}
 	if n := up.cancelSessions(context.Background(), map[string]bool{"sess_other": true}); n != 0 {
 		t.Fatalf("cancelled %d tasks of another run", n)
 	}
@@ -145,5 +152,39 @@ func TestStopRun(t *testing.T) {
 	evs, _ := st.ListEvents(ctx, store.EventFilter{UserID: "usr_op", Limit: store.EventLimitAll})
 	if len(evs) != 2 || evs[0].Type != store.EventRunStopped || evs[1].Type != store.EventRunStopped {
 		t.Errorf("events = %+v", evs)
+	}
+}
+
+// One agent's task can be read and stopped on its own: the status comes from the agent, the
+// stop cancels only that agent's tasks and is recorded in the run.
+func TestAgentTaskStatusAndStopAgent(t *testing.T) {
+	agent := &slowA2A{}
+	srv := agent.start(t)
+	st := store.NewMemStore()
+	ctx := context.Background()
+	if err := st.PutAdapter(ctx, &store.AdapterDoc{ID: "engineer", Name: "engineer", Doc: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTarget(ctx, &store.Target{ID: "engineer", Kind: TargetKindA2A, Endpoint: srv.URL, AdapterID: "engineer", Owner: "usr_op", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(st, keyring.Sealer(nil))
+	task := RunTask{Target: "engineer", TaskID: "task-7", Session: "sess_hop"}
+	state, _, err := r.AgentTaskStatus(ctx, task)
+	if err != nil || state != a2a.StateWorking {
+		t.Fatalf("status = %q %v", state, err)
+	}
+	if n := r.StopAgent("usr_op", "sess_root", "engineer", []RunTask{task, {Target: "qa", TaskID: "task-9"}}); n != 1 {
+		t.Fatalf("cancelled %d tasks, want 1 (the qa task is not the engineer's)", n)
+	}
+	if state, _, _ := r.AgentTaskStatus(ctx, task); state != a2a.StateCanceled {
+		t.Errorf("after the stop the task is %q", state)
+	}
+	evs, _ := st.ListEvents(ctx, store.EventFilter{UserID: "usr_op", Limit: store.EventLimitAll})
+	if len(evs) != 1 || evs[0].Type != store.EventAgentStopped || evs[0].TargetID != "engineer" || evs[0].SessionHandle != "sess_root" {
+		t.Errorf("events = %+v", evs)
+	}
+	if _, _, err := r.AgentTaskStatus(ctx, RunTask{Target: "nope", TaskID: "x"}); err == nil {
+		t.Error("an unknown target answered")
 	}
 }

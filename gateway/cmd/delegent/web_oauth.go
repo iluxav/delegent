@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,10 +152,22 @@ func discoverOAuth(ctx context.Context, endpoint string) (*discovery, error) {
 			if len(d.Scopes) == 0 {
 				d.Scopes = asm.ScopesSupported
 			}
+			d.Scopes = withOfflineAccess(d.Scopes, asm.ScopesSupported)
 			return d, nil
 		}
 	}
 	return d, errors.New("the server asks for OAuth but its authorization-server metadata could not be read — add it with a token instead")
+}
+
+// withOfflineAccess adds offline_access to the scopes asked for when the authorization server
+// offers it. Some servers (Vercel) issue a refresh token only for that scope, and the resource
+// metadata that the scopes usually come from lists only what the resource itself checks: without
+// it the token cannot be renewed and the server drops out when it expires, often within the hour.
+func withOfflineAccess(scopes, offered []string) []string {
+	if slices.Contains(scopes, "offline_access") || !slices.Contains(offered, "offline_access") {
+		return scopes
+	}
+	return append(slices.Clip(scopes), "offline_access")
 }
 
 // resourceMetadata fetches protected-resource metadata for endpoint. RFC 9728 wants the

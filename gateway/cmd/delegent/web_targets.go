@@ -93,6 +93,11 @@ type targetView struct {
 	FilterType string
 	AuditSig   string
 
+	// the dashboard popup also carries agents' questions to the operator; Question is the one
+	// shown when it is older than the first waiting approval
+	Questions []gateway.QuestionView
+	Question  *gateway.QuestionView
+
 	// consents tab
 	Live       []gateway.PendingView
 	History    []*store.ConsentRequest

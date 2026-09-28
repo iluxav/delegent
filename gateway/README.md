@@ -113,6 +113,14 @@ attached to the running task rather than starting a second one. A task the agent
 `input-required` likewise comes back with a `get_task` handle to resume it.
 `agents/` in the repository is a five-agent team built this way.
 
+**Questions to the operator.** Every client also gets `ask_operator`: an agent that needs a
+decision only a human can make (which account or team, an unclear requirement, whether to go
+ahead) asks it through the gateway instead of guessing or stopping. The question appears in the
+dashboard popup with the chain it was asked in (and any choices the agent offers), the call waits
+for the answer like an approval does, and both are recorded in the run. An answer grants nothing:
+access still comes only from approvals. Unanswered questions expire with the consent TTL, and
+stopping a run cancels its questions.
+
 ## Dashboard
 
 ```sh

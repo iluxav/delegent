@@ -30,6 +30,13 @@ import (
 // returned logs capture what serve would print — including the setup code.
 func newDashboard(t *testing.T) (*httptest.Server, *env, *bytes.Buffer) {
 	t.Helper()
+	ts, e, logs, _ := newDashboardReg(t)
+	return ts, e, logs
+}
+
+// newDashboardReg is newDashboard, also handing back the gateway registry the dashboard uses.
+func newDashboardReg(t *testing.T) (*httptest.Server, *env, *bytes.Buffer, *gateway.Registry) {
+	t.Helper()
 	t.Setenv("DELEGENT_MASTER_KEY", "")
 	home := t.TempDir()
 	if err := cmdInit([]string{"--home", home}); err != nil {
@@ -43,12 +50,13 @@ func newDashboard(t *testing.T) (*httptest.Server, *env, *bytes.Buffer) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	mux := http.NewServeMux()
-	if err := mountWeb(mux, e, gateway.NewRegistry(e.st, e.sealer)); err != nil {
+	reg := gateway.NewRegistry(e.st, e.sealer)
+	if err := mountWeb(mux, e, reg); err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
-	return ts, e, &logs
+	return ts, e, &logs, reg
 }
 
 func browser(t *testing.T) *http.Client {

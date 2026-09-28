@@ -143,7 +143,10 @@ const (
 	EventPermissionDenied    = "permission_denied"
 	EventError               = "error"
 	EventDisconnected        = "disconnected"
-	EventRunStopped          = "run_stopped" // a human stopped a whole run (SessionHandle = its root)
+	EventRunStopped          = "run_stopped"       // a human stopped a whole run (SessionHandle = its root)
+	EventQuestionAsked       = "question_asked"    // an agent asked the operator (Params: question_id, question, choices, why)
+	EventQuestionAnswered    = "question_answered" // its outcome (Result: question_id, status, answer)
+	EventAgentStopped        = "agent_stopped"     // a human stopped one agent's tasks in a run (TargetID, SessionHandle = the run's root)
 )
 
 // Event is one row of the durable, operator-facing ACTIVITY LOG: an append-only stream of what

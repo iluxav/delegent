@@ -32,6 +32,10 @@ type instance interface {
 	StopSessions(ctx context.Context, sessions map[string]bool) (denied, canceled int)
 	// CancelAgentTask cancels one task on the agent this target fronts (A2A targets only).
 	CancelAgentTask(ctx context.Context, taskID, session string) error
+	// AgentTaskStatus reads one of that agent's tasks: its state and latest word.
+	AgentTaskStatus(ctx context.Context, taskID, session string) (state, text string, err error)
+	// RunningAgentTasks lists that agent's unfinished tasks started for the given sessions.
+	RunningAgentTasks(sessions map[string]bool) []AgentTask
 }
 
 // errDisabled marks a target that exists but is switched off in the console.
@@ -56,6 +60,9 @@ type Registry struct {
 	// notifier alerts owners out-of-band (telegram, …) when a consent request parks; wired
 	// into every built gateway. nil = no notification.
 	notifier ConsentNotifier
+
+	// questions are the agents' questions waiting on their operators (see questions.go).
+	questions *questionStore
 
 	mu    sync.Mutex
 	slots map[string]*slot
@@ -90,6 +97,7 @@ func NewRegistry(st store.Store, sealer keyring.Sealer) *Registry {
 		hub:        hub,
 		slots:      map[string]*slot{},
 		aggregates: map[string]*Aggregate{},
+		questions:  newQuestionStore(),
 	}
 	r.build = func(ctx context.Context, st store.Store, sealer keyring.Sealer, target *store.Target) (instance, error) {
 		g, err := New(ctx, st, sealer, target)
@@ -332,10 +340,11 @@ func (r *Registry) reconcileOrphan(owner, id string) {
 
 // StopReport is what stopping a run did.
 type StopReport struct {
-	Sessions int // sessions in the run
-	Revoked  int // of them, newly revoked
-	Denied   int // approval asks from the run that were still waiting, now denied
-	Canceled int // agent tasks cancelled on the agents
+	Sessions  int // sessions in the run
+	Revoked   int // of them, newly revoked
+	Denied    int // approval asks from the run that were still waiting, now denied
+	Canceled  int // agent tasks cancelled on the agents
+	Questions int // questions from the run that were still waiting, now cancelled
 }
 
 // ErrNoSuchRun is returned when the root session is unknown or not the owner's.
@@ -389,6 +398,7 @@ func (r *Registry) StopRun(owner, root string, known ...RunTask) (StopReport, er
 		rep.Denied += d
 		rep.Canceled += c
 	}
+	rep.Questions = r.cancelQuestions(sessions)
 	// Tasks the log knows about but no gateway remembers (it restarted since): cancel them by
 	// id. One already cancelled above just fails here and is not counted twice.
 	for _, t := range known {
@@ -411,6 +421,58 @@ func (r *Registry) StopRun(owner, root string, known ...RunTask) (StopReport, er
 	})
 	log.Printf("[delegent] run %s stopped: %d/%d sessions revoked, %d asks denied, %d agent tasks cancelled", root, rep.Revoked, rep.Sessions, rep.Denied, rep.Canceled)
 	return rep, nil
+}
+
+// AgentTaskStatus asks an agent target where one of its tasks stands. The caller vouches that
+// the task is one of its operator's (the dashboard reads it from the operator's own run).
+func (r *Registry) AgentTaskStatus(ctx context.Context, t RunTask) (state, text string, err error) {
+	gw, err := r.get(ctx, t.Target)
+	if err != nil {
+		return "", "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return gw.AgentTaskStatus(ctx, t.TaskID, t.Session)
+}
+
+// RunningAgentTasks lists the tasks an agent target is working on for the given sessions (a
+// run's). nil for a target that is not an agent or cannot be reached.
+func (r *Registry) RunningAgentTasks(ctx context.Context, target string, sessions map[string]bool) []AgentTask {
+	gw, err := r.get(ctx, target)
+	if err != nil {
+		return nil
+	}
+	return gw.RunningAgentTasks(sessions)
+}
+
+// StopAgent cancels the given tasks of one agent in a run (the caller vouches, as for
+// AgentTaskStatus) and records it in the run. The rest of the run carries on: whoever was
+// waiting on the agent gets its task back as cancelled.
+func (r *Registry) StopAgent(owner, root, target string, tasks []RunTask) int {
+	ctx := context.Background()
+	canceled := 0
+	for _, t := range tasks {
+		if t.Target != target {
+			continue
+		}
+		gw, err := r.get(ctx, t.Target)
+		if err != nil {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if gw.CancelAgentTask(cctx, t.TaskID, t.Session) == nil {
+			canceled++
+		}
+		cancel()
+	}
+	if r.st != nil {
+		r.st.AppendEvent(ctx, &store.Event{
+			Type: store.EventAgentStopped, UserID: owner, SessionHandle: root, TargetID: target, CreatedAt: nowMillis(),
+			Reason: fmt.Sprintf("stopped from the dashboard: %d of its tasks cancelled", canceled),
+		})
+	}
+	log.Printf("[delegent] run %s: agent %s stopped, %d tasks cancelled", root, target, canceled)
+	return canceled
 }
 
 // SubscribeConsent returns a channel of console park/resolve events and a cancel func that

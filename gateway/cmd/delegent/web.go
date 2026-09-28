@@ -58,6 +58,7 @@ func mountWeb(mux *http.ServeMux, e *env, reg *gateway.Registry) error {
 		"lower":        strings.ToLower,
 		"time":         evTime,
 		"catalogBrand": catalogBrand,
+		"add":          func(a, b int) int { return a + b },
 	}).ParseFS(webTemplates, "web/templates/*.html")
 	if err != nil {
 		return err
@@ -106,11 +107,14 @@ func mountWeb(mux *http.ServeMux, e *env, reg *gateway.Registry) error {
 	guarded.HandleFunc("POST /targets/{id}/keys", w.mintAgentKey)
 	guarded.HandleFunc("GET /consents/live", w.liveConsents)
 	guarded.HandleFunc("POST /consents/{id}", w.resolveConsent)
+	guarded.HandleFunc("POST /questions/{id}", w.answerQuestion)
 	guarded.HandleFunc("GET /runs", w.runsPage)
 	guarded.HandleFunc("GET /runs/{id}", w.runPage)
 	guarded.HandleFunc("GET /runs/{id}/diagram", w.runDiagram)
 	guarded.HandleFunc("GET /runs/{id}/state", w.runState)
 	guarded.HandleFunc("POST /runs/{id}/stop", w.stopRun)
+	guarded.HandleFunc("GET /runs/{id}/agents/{name}", w.agentInspect)
+	guarded.HandleFunc("POST /runs/{id}/agents/{name}/stop", w.stopAgent)
 	guarded.HandleFunc("GET /connect", w.connectPane)
 	guarded.HandleFunc("GET /keys", w.keysPage)
 	guarded.HandleFunc("POST /keys", w.mintKey)

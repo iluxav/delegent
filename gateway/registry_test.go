@@ -35,6 +35,10 @@ func (f *fakeInstance) StopSessions(context.Context, map[string]bool) (int, int)
 func (f *fakeInstance) CancelAgentTask(context.Context, string, string) error {
 	return errors.New("no agent")
 }
+func (f *fakeInstance) AgentTaskStatus(context.Context, string, string) (string, string, error) {
+	return "", "", errors.New("no agent")
+}
+func (f *fakeInstance) RunningAgentTasks(map[string]bool) []AgentTask { return nil }
 func (f *fakeInstance) ResolvePending(string, consoleDecision) (bool, bool, string) {
 	return false, false, "no such request"
 }

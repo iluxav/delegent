@@ -122,12 +122,56 @@ func (w *webApp) liveConsents(rw http.ResponseWriter, r *http.Request) {
 	live, sig := w.allLive("")
 	if strings.Contains(r.Header.Get("HX-Current-URL"), "/consents") {
 		live = nil
+		sig = ""
 	}
-	if sig == r.URL.Query().Get("known") {
+	v := w.popupView(live, sig)
+	if v.ConsentSig == r.URL.Query().Get("known") {
 		rw.WriteHeader(http.StatusNoContent)
 		return
 	}
-	w.render(rw, "consentPopup", &targetView{Live: live, ConsentSig: sig})
+	w.render(rw, "consentPopup", v)
+}
+
+// popupView adds the agents' waiting questions to the popup, and picks what it shows first:
+// whichever of the oldest approval ask and the oldest question has waited longer.
+func (w *webApp) popupView(live []gateway.PendingView, sig string) *targetView {
+	v := &targetView{Live: live, ConsentSig: sig, Questions: w.reg.PendingQuestions(w.e.operator)}
+	for _, q := range v.Questions {
+		v.ConsentSig += "q:" + q.ID + ","
+	}
+	if len(v.Questions) > 0 && (len(live) == 0 || v.Questions[0].CreatedAt < live[0].CreatedAt) {
+		v.Question = &v.Questions[0]
+	}
+	return v
+}
+
+// answerQuestion takes the operator's answer to an agent's question from the popup: a choice
+// button, or the free-text answer.
+func (w *webApp) answerQuestion(rw http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(rw, "bad form", http.StatusBadRequest)
+		return
+	}
+	answer := strings.TrimSpace(r.FormValue("choice"))
+	if answer == "" {
+		answer = strings.TrimSpace(r.FormValue("answer"))
+	}
+	if r.FormValue("action") == "skip" {
+		answer = "The operator chose not to answer. Use your best judgment, and say in your summary what you decided and why."
+	}
+	live, sig := w.allLive("")
+	if answer == "" {
+		v := w.popupView(live, sig)
+		v.Error = "Pick one of the choices or write an answer."
+		w.render(rw, "consentPopup", v)
+		return
+	}
+	ok := w.reg.AnswerQuestion(w.e.operator, r.PathValue("id"), answer)
+	v := w.popupView(live, sig)
+	if !ok {
+		v.Error = "That question is no longer waiting: it was answered, it expired, or its run was stopped."
+	}
+	w.render(rw, "consentPopup", v)
 }
 
 // --- tab handlers ---
@@ -205,9 +249,9 @@ func (w *webApp) resolveConsent(rw http.ResponseWriter, r *http.Request) {
 		granted = r.Form["scope"]
 		if len(granted) == 0 {
 			if popup {
-				live, sig := w.allLive("")
-				w.render(rw, "consentPopup", &targetView{Live: live, ConsentSig: sig,
-					Error: "Tick at least one capability to approve, or deny."})
+				pv := w.popupView(w.allLive(""))
+				pv.Error = "Tick at least one capability to approve, or deny."
+				w.render(rw, "consentPopup", pv)
 				return
 			}
 			v.Live, v.History, v.ConsentSig = w.consents(targetID, "")
@@ -222,8 +266,7 @@ func (w *webApp) resolveConsent(rw http.ResponseWriter, r *http.Request) {
 	always := approve && r.FormValue("always") == "1"
 	ok, err := w.reg.ResolveConsentAlways(w.e.operator, askID, granted, ttl, budget, always)
 	if popup {
-		live, sig := w.allLive(askID)
-		pv := &targetView{Live: live, ConsentSig: sig}
+		pv := w.popupView(w.allLive(askID))
 		if err != nil {
 			pv.Error = err.Error()
 		} else if !ok {

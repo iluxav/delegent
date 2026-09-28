@@ -16,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"delegent.dev/gateway/a2a"
 	"delegent.dev/gateway/store"
 )
@@ -78,10 +81,11 @@ func TestBuildRunsGroupsHops(t *testing.T) {
 	if r.Status != "waiting for your approval" || r.pendingCount != 1 {
 		t.Errorf("status = %q pending=%d", r.Status, r.pendingCount)
 	}
-	// the librarian call parked on consent and was retried after the grant: one open call,
-	// closed by the one reply — never two
-	if r.openCalls != 2 { // research_topic (still running) + send_email (waiting)
-		t.Errorf("open calls = %d, want 2", r.openCalls)
+	// A call that parks on its ask does not run: the librarian call was closed by its ask and
+	// its retry by the reply, and send_email is parked on its pending ask (which keeps the run
+	// "waiting for your approval"). Only research_topic is still running.
+	if r.openCalls != 1 {
+		t.Errorf("open calls = %d, want 1 (research_topic)", r.openCalls)
 	}
 	retries := 0
 	for _, row := range r.Rows {
@@ -682,5 +686,191 @@ func TestUnfinishedTasksFromTheLog(t *testing.T) {
 	got := unfinishedTasks(x)
 	if len(got) != 1 || got[0].Target != "engineer" || got[0].TaskID != "t1" || got[0].Session != "sess_hop" {
 		t.Errorf("unfinished = %+v", got)
+	}
+}
+
+// An agent's question reaches the operator in the dashboard popup, with its choices; the
+// operator's pick goes back to the waiting agent; the run shows the question and the answer.
+func TestQuestionInThePopupAndTheRun(t *testing.T) {
+	t.Setenv("DELEGENT_CONSENT_SYNC_WAIT", "50ms")
+	ts, e, logs, reg := newDashboardReg(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+
+	ctx := context.Background()
+	e.st.PutSession(ctx, &store.Session{Handle: "sess_root", Principal: e.operator})
+	e.st.AppendEvent(ctx, &store.Event{Type: store.EventToolCall, UserID: e.operator, KeyName: "playground", TargetID: "devops", Tool: "deploy_site", SessionHandle: "sess_root", CreatedAt: time.Now().UnixMilli()})
+	agentCtx := agentContext(t, e.operator, "agent:devops", "sess_root")
+	if got := mustAnswerText(reg.AskOperator(agentCtx, e.operator, "conn1", "Which Vercel team?", []string{"iluxav", "acme"}, "two teams")); !strings.Contains(got, "waiting for the operator") {
+		t.Fatalf("ask = %q", got)
+	}
+
+	_, pop := get(t, c, ts.URL+"/consents/live")
+	qs := reg.PendingQuestions(e.operator)
+	if len(qs) != 1 || !strings.Contains(pop, "Which Vercel team?") || !strings.Contains(pop, `value="acme"`) || !strings.Contains(pop, `hx-post="/questions/`+qs[0].ID+`"`) {
+		t.Fatalf("the popup does not show the question:\n%s", pop)
+	}
+	x := findTestRun(t, ts, c, "sess_root")
+	if x.Status != "waiting for your answer" {
+		t.Errorf("run status = %q", x.Status)
+	}
+
+	_, pop = post(t, c, ts.URL+"/questions/"+qs[0].ID, url.Values{"choice": {"iluxav"}}, true)
+	if strings.Contains(pop, "Which Vercel team?") {
+		t.Error("the answered question is still in the popup")
+	}
+	if got := mustAnswerText(reg.AskOperator(agentCtx, e.operator, "conn1", "Which Vercel team?", nil, "")); !strings.Contains(got, "waiting") {
+		// the answered question is settled; asking the same again files a new one
+		t.Logf("re-ask: %q", got)
+	}
+	_, page := get(t, c, ts.URL+"/runs/sess_root/diagram")
+	if !strings.Contains(page, "asks you") || !strings.Contains(page, "answered") || !strings.Contains(page, "iluxav") {
+		t.Errorf("the run does not show the question and its answer")
+	}
+}
+
+func agentContext(t *testing.T, user, key, parent string) context.Context {
+	t.Helper()
+	var captured context.Context
+	h := auth.RequireBearerToken(func(context.Context, string, *http.Request) (*auth.TokenInfo, error) {
+		return &auth.TokenInfo{UserID: user, Expiration: time.Now().Add(time.Hour), Extra: map[string]any{"key_prefix": "dgk_x", "key_name": key, "parent_session": parent}}, nil
+	}, &auth.RequireBearerTokenOptions{})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { captured = r.Context() }))
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("Authorization", "Bearer x")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if captured == nil {
+		t.Fatal("no auth context")
+	}
+	return captured
+}
+
+func mustAnswerText(r *mcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range r.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}
+
+// A call that parks on its ask never runs; its retry, perhaps after other calls, is what gets
+// the reply. None of this may leave the target looking busy once everything was answered.
+func TestAParkedCallDoesNotStayOpen(t *testing.T) {
+	calls := []*store.Event{
+		ev(store.EventToolCall, "playground", "pm", "plan_project", "sess_root", "", 1, params("plan")),
+		ev(store.EventToolCall, "agent:pm", "linear", "list_teams", "", "sess_root", 2, nil),
+		ev(store.EventPermissionRequested, "agent:pm", "linear", "list_teams", "", "sess_root", 2, nil),
+		ev(store.EventPermissionGranted, "agent:pm", "linear", "", "sess_hop", "sess_root", 3, nil),
+		// the agent does something else before retrying
+		ev(store.EventToolCall, "agent:pm", "linear", "list_projects", "sess_hop", "sess_root", 4, nil),
+		ev(store.EventToolResponse, "agent:pm", "linear", "list_projects", "sess_hop", "sess_root", 5, result("P-1")),
+		ev(store.EventToolCall, "agent:pm", "linear", "list_teams", "sess_hop", "sess_root", 6, nil),
+		ev(store.EventToolResponse, "agent:pm", "linear", "list_teams", "sess_hop", "sess_root", 7, result("Test")),
+		ev(store.EventToolResponse, "playground", "pm", "plan_project", "sess_root", "", 8, result("done")),
+	}
+	runs := buildRuns(calls)
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs", len(runs))
+	}
+	if r := runs[0]; r.openCalls != 0 || r.Status != "done" {
+		t.Errorf("status %q with %d calls still open, want done with none", r.Status, r.openCalls)
+	}
+}
+
+// The inspector's task list for one agent: what each task was asked (the call it answers),
+// who asked, and its latest state and word; a later check on the same task updates it.
+func TestAgentTasksForTheInspector(t *testing.T) {
+	reply := func(taskID, state, text string) func(*store.Event) {
+		return func(e *store.Event) {
+			e.Result, _ = json.Marshal(map[string]any{
+				"content":           []map[string]any{{"type": "text", "text": text}},
+				"structuredContent": map[string]any{"task_id": taskID, "state": state},
+			})
+		}
+	}
+	x := &run{Harness: "playground", events: []*store.Event{
+		ev(store.EventToolCall, "agent:pm", "engineer", "build_feature", "sess_hop", "sess_root", 1, params("build the landing page")),
+		ev(store.EventToolResponse, "agent:pm", "engineer", "build_feature", "sess_hop", "sess_root", 2, reply("t1", "working", "on it")),
+		ev(store.EventToolCall, "agent:pm", "designer", "define", "sess_hop2", "sess_root", 3, params("pick colours")),
+		ev(store.EventToolResponse, "agent:pm", "designer", "define", "sess_hop2", "sess_root", 4, reply("t2", "working", "")),
+		ev(store.EventToolCall, "agent:pm", "engineer", "get_task", "sess_hop", "sess_root", 5, func(e *store.Event) { e.Params = json.RawMessage(`{"task_id":"t1"}`) }),
+		ev(store.EventToolResponse, "agent:pm", "engineer", "get_task", "sess_hop", "sess_root", 6, reply("t1", "completed", "deployed")),
+	}}
+	got := agentTasks(x, "engineer")
+	if len(got) != 1 {
+		t.Fatalf("tasks = %+v", got)
+	}
+	g := got[0]
+	if g.TaskID != "t1" || g.State != "completed" || g.Asked != "build the landing page" || g.AskedBy != "pm" || g.Latest != "deployed" || g.session != "sess_hop" {
+		t.Errorf("task = %+v", g)
+	}
+	if d := agentTasks(x, "designer"); len(d) != 1 || d[0].State != "working" || d[0].Asked != "pick colours" {
+		t.Errorf("designer = %+v", d)
+	}
+	if n := agentTasks(x, "qa"); len(n) != 0 {
+		t.Errorf("qa = %+v", n)
+	}
+}
+
+// Stopping one agent from the run page: only the page's script can post it, it is recorded
+// in the run as a stop of that agent, and the run itself is not stopped.
+func TestStopOneAgentFromTheRunPage(t *testing.T) {
+	ts, e, logs := newDashboard(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+
+	ctx := context.Background()
+	e.st.PutSession(ctx, &store.Session{Handle: "sess_root", Principal: e.operator})
+	e.st.PutSession(ctx, &store.Session{Handle: "sess_hop", Principal: e.operator, ParentHandle: "sess_root"})
+	now := time.Now().UnixMilli() - 50 // in the past: the stop is stamped after them
+	for _, x := range []*store.Event{
+		{Type: store.EventToolCall, KeyName: "playground", TargetID: "pm", Tool: "plan_project", SessionHandle: "sess_root", CreatedAt: now},
+		{Type: store.EventToolCall, KeyName: "agent:pm", TargetID: "engineer", Tool: "build_feature", SessionHandle: "sess_hop", ParentHandle: "sess_root", CreatedAt: now + 1, Params: json.RawMessage(`{"message":"build it"}`)},
+	} {
+		x.UserID = e.operator
+		e.st.AppendEvent(ctx, x)
+	}
+
+	var panel struct {
+		Name  string `json:"name"`
+		Agent bool   `json:"agent"`
+		Tasks []any  `json:"tasks"`
+	}
+	_, body := get(t, c, ts.URL+"/runs/sess_root/agents/engineer")
+	if err := json.Unmarshal([]byte(body), &panel); err != nil || panel.Name != "engineer" || panel.Tasks == nil {
+		t.Fatalf("panel = %s (%v)", body, err)
+	}
+
+	if res, _ := post(t, c, ts.URL+"/runs/sess_root/agents/engineer/stop", url.Values{}, false); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a plain form post stopped an agent: %d", res.StatusCode)
+	}
+	if res, _ := post(t, c, ts.URL+"/runs/sess_root/agents/engineer/stop", url.Values{}, true); res.StatusCode != http.StatusOK {
+		t.Fatalf("stop: %d", res.StatusCode)
+	}
+	var state struct {
+		Status string `json:"status"`
+		Rows   []struct {
+			Kind, Label, Target string
+		} `json:"rows"`
+	}
+	_, body = get(t, c, ts.URL+"/runs/sess_root/state")
+	json.Unmarshal([]byte(body), &state)
+	last := state.Rows[len(state.Rows)-1]
+	if last.Kind != "stop_agent" || last.Target != "engineer" || last.Label != "stopped engineer" {
+		t.Errorf("last row = %+v", last)
+	}
+	if state.Status == "stopped" {
+		t.Error("stopping one agent stopped the whole run")
+	}
+	if ss, _ := e.st.GetSession(ctx, "sess_root"); ss.RevokedAt != 0 {
+		t.Error("stopping one agent revoked the run's session")
+	}
+	if res, _ := post(t, c, ts.URL+"/runs/sess_nope/agents/engineer/stop", url.Values{}, true); res.StatusCode != http.StatusNotFound {
+		t.Errorf("stop in an unknown run: %d", res.StatusCode)
 	}
 }
