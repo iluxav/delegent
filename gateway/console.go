@@ -237,6 +237,26 @@ type consoleDecision struct {
 	always     bool // also remember the decision for the asking key on this target
 }
 
+// StopSessions ends the work this target is doing for a stopped run, given every session
+// handle in it: an approval ask from one of the run's hops is denied (so a stale ask can never
+// be approved later), and the agent tasks this target started for the run are cancelled on
+// the agent. Returns how many asks were denied and tasks cancelled.
+func (g *Gateway) StopSessions(ctx context.Context, sessions map[string]bool) (denied, canceled int) {
+	for _, pc := range g.pending.listLive() {
+		_, parent, ok := strings.Cut(pc.ConnID, connKeySep)
+		if !ok || !sessions[parent] {
+			continue
+		}
+		if found, _, _ := g.ResolvePending(pc.ID, consoleDecision{owner: pc.Principal}); found {
+			denied++
+		}
+	}
+	if u, ok := g.upstream.(*a2aUpstream); ok {
+		canceled = u.cancelSessions(ctx, sessions)
+	}
+	return denied, canceled
+}
+
 // ResolvePending applies a human's console decision to pending id: it burns the nonce (no
 // widget binding — the console bearer + owner filter already authorized it) and runs the SAME
 // mint path the widget's submit uses, which resolves the record's done channel so the blocked

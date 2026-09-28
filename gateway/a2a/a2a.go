@@ -330,7 +330,10 @@ func (c *Client) Send(ctx context.Context, text string, o SendOpts) (*Result, er
 		Kind: "message", Role: "user", Parts: []Part{TextPart(text)},
 		MessageID: newID(), ContextID: o.ContextID, TaskID: o.TaskID, Metadata: meta,
 	}
-	params := map[string]any{"message": msg}
+	// Non-blocking: the agent hands back its task at once and the task is polled below, so one
+	// call never waits longer than PollTimeout. A2A SDKs block by default, which would hold the
+	// request open for the agent's whole run and bypass that bound.
+	params := map[string]any{"message": msg, "configuration": map[string]any{"blocking": false}}
 	var raw json.RawMessage
 	if err := c.call(ctx, "message/send", params, o.Session, &raw); err != nil {
 		return nil, err

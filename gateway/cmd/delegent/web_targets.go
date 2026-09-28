@@ -374,11 +374,20 @@ func (w *webApp) withError(rw http.ResponseWriter, r *http.Request, v *targetVie
 type newTargetForm struct {
 	Name, Endpoint string
 	Error          string
-	Catalog        []catalogTile
+	Catalog        catalog
+	// Token is the catalog server this form was prefilled for when that server takes a
+	// pasted token instead of OAuth sign-in: the token field starts open, linked to TokenURL.
+	Token catalogServer
 }
 
+// newTargetPage is the add page. ?server=<catalog id> prefills it for a catalog server that
+// needs a token (its tile links here instead of posting straight to sign-in).
 func (w *webApp) newTargetPage(rw http.ResponseWriter, r *http.Request) {
-	w.page(rw, r, "new", "newTarget", newTargetForm{Catalog: w.catalogTiles(r)})
+	f := newTargetForm{Catalog: w.catalogTiles(r)}
+	if s, ok := catalogByID(r.URL.Query().Get("server")); ok && s.TokenURL() != "" {
+		f.Name, f.Endpoint, f.Token = s.Name, s.Endpoint, s
+	}
+	w.page(rw, r, "new", "newTarget", f)
 }
 
 // createTarget is target add: introspect the endpoint, accept the drafted classification, and
@@ -519,5 +528,10 @@ func (w *webApp) removeTarget(rw http.ResponseWriter, r *http.Request) {
 func (w *webApp) addFailed(rw http.ResponseWriter, r *http.Request, f newTargetForm, msg string) {
 	f.Error = msg
 	f.Catalog = w.catalogTiles(r)
+	for _, s := range popularServers {
+		if s.Endpoint == f.Endpoint && s.TokenURL() != "" {
+			f.Token = s
+		}
+	}
 	w.page(rw, r, "new", "newTarget", f)
 }

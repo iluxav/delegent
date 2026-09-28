@@ -7,5 +7,4 @@ use (
 	./protocol
 	./gateway
 	./inspector
-	./agents
 )

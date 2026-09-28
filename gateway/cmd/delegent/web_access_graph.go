@@ -232,6 +232,9 @@ func accessGraph(ctx context.Context, st store.Store, t *store.Target) template.
 		}
 		if id != youID {
 			b.WriteString(`</a>`)
+			if isAgent(id) {
+				fmt.Fprintf(&b, `<a class="ag-run" href="/play/%s" hx-get="/play/%s" hx-target="#main" hx-push-url="true"><title>Run %s in the playground</title><text x="%.0f" y="73" text-anchor="end">run ▸</text></a>`, template.HTMLEscapeString(id), template.HTMLEscapeString(id), template.HTMLEscapeString(label), bw-14)
+			}
 		}
 		b.WriteString(`</g>`)
 	}

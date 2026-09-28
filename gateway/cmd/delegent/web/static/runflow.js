@@ -1,7 +1,8 @@
 // runflow.js — the live flow view of one run: agent boxes, the edges between them, and
 // animated packets carrying each request and reply as the gateway records it. Driven by
-// polling /runs/{id}/state (204 while nothing changed); new rows are queued and played in
-// order, so a burst of events still reads as a sequence. A finished run can be replayed.
+// polling /runs/{id}/state (204 while nothing changed). On load the run is drawn as it stands
+// now, at once; only rows that arrive afterwards are animated, queued and played in order so a
+// burst of events still reads as a sequence. Any run can be replayed from the start.
 (() => {
   const SVG = 'http://www.w3.org/2000/svg';
   const NODE_W = 192, NODE_H = 100, GAP = 64, TOP = 174, YOU_Y = 24, PAD = 28;
@@ -33,7 +34,8 @@
       this.noteEl = root.querySelector('[data-flow-note]');
       this.sig = '';
       this.state = null;
-      this.played = 0;       // rows already animated
+      this.played = 0;       // rows taken from the state (drawn or queued to animate)
+      this.shown = 0;        // rows whose effect is on the canvas
       this.queue = [];       // rows waiting to animate
       this.playing = false;
       this.nodes = [];       // {g, box, name, state, data, x, y}
@@ -69,11 +71,24 @@
     }
 
     apply(state) {
-      const fresh = !this.state || this.state.participants.length !== state.participants.length;
+      const first = !this.state;
+      const fresh = first || this.state.participants.length !== state.participants.length;
       this.state = state;
-      if (fresh) this.layout();
+      if (fresh) {
+        this.layout();
+        // A new participant rebuilt the canvas: put back what was already on it.
+        for (let i = 0; i < this.shown; i++) this.effects(state.rows[i]);
+      }
       this.statusEl.textContent = state.status;
       this.statusEl.className = 'pill ' + ({ ok: 'bg-ok-soft text-ok', warn: 'bg-warn-soft text-warn', bad: 'bg-bad-soft text-bad' }[state.status_tone] || 'bg-panel text-ink-soft');
+      // Once stopped, there is nothing left to stop.
+      const stop = document.querySelector('[data-stop-run]');
+      if (stop && state.status === 'stopped') stop.hidden = true;
+      if (first) {
+        // Opening (or reloading) the page shows the run as it stands now, not a replay of it.
+        for (const row of state.rows) { this.effects(row); this.feedLine(row); }
+        this.played = this.shown = state.rows.length;
+      }
       for (let i = this.played; i < state.rows.length; i++) this.queue.push({ index: i, row: state.rows[i] });
       this.played = state.rows.length;
       // an ask that was pending and is now settled stops pulsing without a new row
@@ -226,6 +241,7 @@
       this.play(row).then(() => { this.playing = false; setTimeout(() => this.drain(), STEP_GAP_MS); });
     }
 
+    // play animates one row along its edge, then applies its effect.
     play(row) {
       const path = this.edge(row.from, row.to, row.kind);
       path.classList.add('is-active');
@@ -233,33 +249,47 @@
       this.feedLine(row);
       return this.packet(path, row).then(() => {
         path.classList.remove('is-active');
-        switch (row.kind) {
-          case 'call':
-            if (!/\(retry\)$/.test(row.label)) this.open.set(row.to, (this.open.get(row.to) || 0) + 1);
-            this.setState(row.to, 'working'); this.setData(row.to, '← ' + row.text);
-            if (this.nodes[row.from].kind !== 'you') this.setState(row.from, 'working');
-            break;
-          case 'ask':
-            this.setState(row.from, row.pending ? 'waiting' : 'working'); this.setState(row.to, row.pending ? 'deciding' : 'idle');
-            this.setData(row.to, row.label);
-            break;
-          case 'grant':
-            this.setState(row.from, 'idle'); this.setState(row.to, 'working'); this.setData(row.to, 'approved: ' + row.text);
-            break;
-          case 'deny':
-            this.setState(row.from, 'idle'); this.setState(row.to, 'refused'); this.setData(row.to, 'denied: ' + row.text);
-            break;
-          case 'reply': case 'error': {
-            const left = Math.max(0, (this.open.get(row.from) || 1) - 1);
-            this.open.set(row.from, left);
-            this.setState(row.from, left ? 'working' : (row.kind === 'error' ? 'refused' : 'done'));
-            this.setData(row.from, '→ ' + row.text);
-            this.setData(row.to, '← ' + row.text);
-            if (!this.stillWorking(row.to)) this.setState(row.to, this.nodes[row.to].kind === 'harness' ? 'done' : 'idle');
-            break;
-          }
-        }
+        this.effects(row);
+        this.shown++;
       });
+    }
+
+    // effects puts one row's outcome on the canvas: its edge, and the state of the boxes it
+    // touches. Used after an animation, and on its own to draw a run as it stands.
+    effects(row) {
+      const path = this.edge(row.from, row.to, row.kind);
+      if (row.tone) path.classList.add('flow-tone-' + row.tone);
+      switch (row.kind) {
+        case 'call':
+          if (!/\(retry\)$/.test(row.label)) this.open.set(row.to, (this.open.get(row.to) || 0) + 1);
+          this.setState(row.to, 'working'); this.setData(row.to, '← ' + row.text);
+          if (this.nodes[row.from].kind !== 'you') this.setState(row.from, 'working');
+          break;
+        case 'ask':
+          this.setState(row.from, row.pending ? 'waiting' : 'working'); this.setState(row.to, row.pending ? 'deciding' : 'idle');
+          this.setData(row.to, row.label);
+          break;
+        case 'grant':
+          this.setState(row.from, 'idle'); this.setState(row.to, 'working'); this.setData(row.to, 'approved: ' + row.text);
+          break;
+        case 'deny':
+          this.setState(row.from, 'idle'); this.setState(row.to, 'refused'); this.setData(row.to, 'denied: ' + row.text);
+          break;
+        case 'stop':
+          this.open.clear();
+          for (const n of this.nodes) if (n.kind !== 'you') this.setState(n.index, 'refused');
+          this.setData(row.to, 'stopped');
+          break;
+        case 'reply': case 'error': {
+          const left = Math.max(0, (this.open.get(row.from) || 1) - 1);
+          this.open.set(row.from, left);
+          this.setState(row.from, left ? 'working' : (row.kind === 'error' ? 'refused' : 'done'));
+          this.setData(row.from, '→ ' + row.text);
+          this.setData(row.to, '← ' + row.text);
+          if (!this.stillWorking(row.to)) this.setState(row.to, this.nodes[row.to].kind === 'harness' ? 'done' : 'idle');
+          break;
+        }
+      }
     }
 
     stillWorking(i) { return (this.open.get(i) || 0) > 0 || [...this.open.entries()].some(([t, n]) => n > 0 && this.lastCaller(t) === i); }
@@ -301,7 +331,7 @@
 
     replay() {
       if (!this.state) return;
-      this.queue = []; this.playing = false; this.played = this.state.rows.length;
+      this.queue = []; this.playing = false; this.played = this.state.rows.length; this.shown = 0;
       this.layout(); this.feed.innerHTML = '';
       this.queue = this.state.rows.map((row, index) => ({ index, row }));
       this.noteEl.textContent = 'replaying';

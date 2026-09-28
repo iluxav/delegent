@@ -143,6 +143,7 @@ const (
 	EventPermissionDenied    = "permission_denied"
 	EventError               = "error"
 	EventDisconnected        = "disconnected"
+	EventRunStopped          = "run_stopped" // a human stopped a whole run (SessionHandle = its root)
 )
 
 // Event is one row of the durable, operator-facing ACTIVITY LOG: an append-only stream of what

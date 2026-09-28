@@ -1,0 +1,48 @@
+{{/* playPage: run an agent from the dashboard as your own client. Pick a skill from its
+     card, write the message, and the run shows up live on the Runs page. */}}
+{{define "playPage"}}
+{{$t := .T}}
+<div class="workspace-page play-page" data-page="play" data-target-id="{{$t.ID}}">
+<a class="page-back" href="/targets/{{$t.ID}}/access" hx-get="/targets/{{$t.ID}}/access" hx-target="#main" hx-push-url="true"><span aria-hidden="true">←</span> {{$t.Name}}</a>
+<header class="page-heading"><div><span class="eyebrow">PLAYGROUND</span><h1>Run {{$t.Name}}</h1><p>Send the agent a task as your own client and watch the run live: every hop it makes, every approval it needs, every answer that comes back. Approvals reach you here in the dashboard.</p></div></header>
+{{if .Error}}<div class="notice bg-bad-soft text-bad" role="alert">{{.Error}}</div>{{end}}
+{{if .Unclassified}}<div class="notice bg-warn-soft text-warn" role="status">Not classified yet: {{join .Unclassified ", "}}. A skill with no effect is refused (fail closed) — set its effect and scope on the <a class="link" href="/targets/{{$t.ID}}" hx-get="/targets/{{$t.ID}}" hx-target="#main" hx-push-url="true">Tool policy</a> tab first.</div>{{end}}
+{{if .Skills}}
+<form class="play-form" hx-post="/play/{{$t.ID}}" hx-target="#main" hx-disabled-elt="find button[type='submit']" method="post" action="/play/{{$t.ID}}">
+  <section class="content-section">
+    <div class="section-heading"><div><h3>Skill</h3><p class="section-description">From the agent’s card. Picking one fills in its example, if it has one.</p></div></div>
+    <div class="access-options" role="radiogroup" aria-label="Skill">
+      {{$sel := .Skill}}{{range .Skills}}
+      <label class="access-option"><input type="radio" name="skill" value="{{.ID}}" {{if eq .ID $sel}}checked{{end}} {{if .Examples}}data-example="{{index .Examples 0}}"{{end}}><span><strong>{{.Name}}</strong><span>{{.Description}}</span>{{if .Examples}}<span class="play-example">e.g. “{{index .Examples 0}}”</span>{{end}}</span></label>
+      {{end}}
+    </div>
+  </section>
+  <section class="content-section">
+    <div class="section-heading"><div><h3>Message</h3><p class="section-description">What the agent should work on. It is the text of the task, exactly as another agent would send it.</p></div></div>
+    <textarea class="input play-message" name="message" rows="4" required {{if .Message}}data-auto="1"{{end}} placeholder="e.g. research solar panels and email the summary to bob@acme.example">{{.Message}}</textarea>
+    <label class="mt-4 block text-xs text-ink-soft" for="play-intent">Why <span class="text-ink-faint">· optional, shown on the approval</span></label>
+    <input class="input mt-1" id="play-intent" name="intent" value="{{.Intent}}" placeholder="playground run from the dashboard" autocomplete="off">
+    <div class="save-bar"><button class="btn btn-primary" type="submit">{{template "iconArrow"}} Run and watch</button><span class="save-hint">You will be taken to the live run.</span></div>
+  </section>
+</form>
+{{else if not .Error}}
+<div class="page-empty"><span class="empty-symbol">{{template "iconActivity"}}</span><div><h3>No skills on the card</h3><p>{{$t.Name}} publishes no skills, so there is nothing to run. Refresh its tools after the agent’s card changes.</p></div></div>
+{{end}}
+</div>
+{{end}}
+
+{{/* playWait: between Run and the live run. Polls itself; the handler redirects to the run
+     the moment its first event is logged, or reports a send that failed before that. */}}
+{{define "playWait"}}
+{{$t := .T}}{{$run := .Run}}
+<div class="workspace-page play-page" data-page="play" data-target-id="{{$t.ID}}" {{if not $run.Err}}hx-get="{{.RunURL}}" hx-trigger="every 1s" hx-target="#main" hx-swap="innerHTML"{{end}}>
+<a class="page-back" href="/play/{{$t.ID}}" hx-get="/play/{{$t.ID}}" hx-target="#main" hx-push-url="true"><span aria-hidden="true">←</span> Playground</a>
+<header class="page-heading"><div><span class="eyebrow">PLAYGROUND</span><h1>{{if $run.Err}}{{$run.TargetName}} did not start{{else}}Starting {{$run.TargetName}}…{{end}}</h1><p>{{$run.Skill}} · “{{$run.Message}}”</p></div></header>
+{{if $run.Err}}
+<div class="notice bg-bad-soft text-bad" role="alert">{{$run.Err}}</div>
+<p class="text-xs text-ink-soft">Nothing was logged for this run. Check the agent is up and that you can reach it, then try again.</p>
+{{else}}
+<div class="page-empty"><span class="empty-symbol">{{template "iconActivity"}}</span><div><h3>Waiting for the first hop <span class="text-ink-faint">· {{.Elapsed}}</span></h3><p>The run opens by itself as soon as {{$run.TargetName}} makes its first move. If it needs your approval, the ask appears at the bottom right.{{if .Slow}} This is taking longer than usual: the agent may be slow to accept the task, or waiting on you.{{end}}</p></div><a class="btn" href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true">All runs {{template "iconArrow"}}</a></div>
+{{end}}
+</div>
+{{end}}

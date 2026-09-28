@@ -17,6 +17,7 @@ type fakeAgent struct {
 	polls    int
 	seen     []http.Header
 	metadata map[string]any
+	blocking any  // params.configuration.blocking of the last message/send
 	immed    bool // reply with a plain message instead of a task
 	secret   string
 }
@@ -45,11 +46,13 @@ func (f *fakeAgent) handler(base string) http.Handler {
 		case "message/send":
 			p, _ := json.Marshal(req.Params)
 			var params struct {
-				Message Message `json:"message"`
+				Message       Message        `json:"message"`
+				Configuration map[string]any `json:"configuration"`
 			}
 			json.Unmarshal(p, &params)
 			f.mu.Lock()
 			f.metadata = params.Message.Metadata
+			f.blocking = params.Configuration["blocking"]
 			f.mu.Unlock()
 			if f.immed {
 				result = Message{Kind: "message", Role: "agent", Parts: []Part{TextPart("hi: " + PartsText(params.Message.Parts))}, MessageID: "m1", ContextID: "ctx1"}
@@ -150,6 +153,9 @@ func TestSendPollsTaskAndCarriesSession(t *testing.T) {
 	}
 	if f.metadata[SessionMetaKey] != "sess_abc" || f.metadata[SkillMetaKey] != "research_topic" {
 		t.Errorf("message metadata = %v", f.metadata)
+	}
+	if f.blocking != false {
+		t.Errorf("message/send must ask for a non-blocking reply so the task is polled; configuration.blocking = %v", f.blocking)
 	}
 }
 

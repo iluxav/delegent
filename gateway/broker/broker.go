@@ -271,7 +271,19 @@ func (b *Broker) sessionLive(ss *store.Session) bool {
 // number of sessions revoked. Unknown/already-revoked handles are a no-op (count reflects only
 // what this call flipped). Callers must have verified the handle belongs to the caller.
 func (b *Broker) RevokeSelf(handle string, chain bool) int {
-	revoked := 0
+	_, revoked := b.revoke(handle, chain)
+	return revoked
+}
+
+// RevokeTree revokes a session and every descendant it (transitively) minted — a whole run —
+// and returns the root and every descendant that was still live, so the caller can stop the
+// work running under them. (A branch revoked earlier is not walked again.) Callers must have
+// verified the handle's owner.
+func (b *Broker) RevokeTree(handle string) (handles []string, revoked int) {
+	return b.revoke(handle, true)
+}
+
+func (b *Broker) revoke(handle string, chain bool) (handles []string, revoked int) {
 	seen := map[string]bool{}
 	var walk func(h string)
 	walk = func(h string) {
@@ -283,6 +295,7 @@ func (b *Broker) RevokeSelf(handle string, chain bool) int {
 		if err != nil {
 			return
 		}
+		handles = append(handles, h)
 		if ss.RevokedAt == 0 {
 			ss.RevokedAt = b.now()
 			if err := b.st.PutSession(bg(), ss); err == nil {
@@ -304,7 +317,7 @@ func (b *Broker) RevokeSelf(handle string, chain bool) int {
 		}
 	}
 	walk(handle)
-	return revoked
+	return handles, revoked
 }
 
 // LatestLiveSession returns the handle of a principal's most-recently-created session that is

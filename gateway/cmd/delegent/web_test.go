@@ -964,10 +964,19 @@ func TestDashboardCatalog(t *testing.T) {
 	// every tile posts its endpoint to the ordinary add flow, and its logo is served
 	_, body := get(t, c, ts.URL+"/targets/new")
 	for _, s := range popularServers {
-		if !strings.Contains(body, `value="`+s.Endpoint+`"`) {
+		if s.TokenURL() != "" {
+			// a server without OAuth sign-in links to the add form, prefilled for a token
+			if !strings.Contains(body, `href="/targets/new?server=`+s.ID+`"`) {
+				t.Errorf("add page has no token tile for %s", s.Name)
+			}
+			_, form := get(t, c, ts.URL+"/targets/new?server="+s.ID)
+			if !strings.Contains(form, `value="`+s.Endpoint+`"`) || !strings.Contains(form, `href="`+s.TokenURL()+`"`) || !strings.Contains(form, "<details open>") {
+				t.Errorf("the %s tile should open the add form prefilled, token field open and linked", s.Name)
+			}
+		} else if !strings.Contains(body, `value="`+s.Endpoint+`"`) {
 			t.Errorf("add page has no tile for %s", s.Name)
 		}
-		if code, _ := get(t, c, ts.URL+"/static/brands/"+s.ID+".svg"); code != 200 {
+		if code, _ := get(t, c, ts.URL+s.Logo()); code != 200 {
 			t.Errorf("logo for %s: %d", s.Name, code)
 		}
 	}
@@ -989,5 +998,18 @@ func TestDashboardCatalog(t *testing.T) {
 	_, body = get(t, c, ts.URL+"/targets/new")
 	if !strings.Contains(body, `href="/targets/work-notes"`) || strings.Contains(body, `value="`+popularServers[0].Endpoint+`"`) {
 		t.Fatal("a connected catalog server should link to its target instead of offering sign-in")
+	}
+}
+
+// Every catalog entry belongs to a known category, or the add page would silently drop it.
+func TestCatalogCategories(t *testing.T) {
+	known := map[string]bool{}
+	for _, c := range catalogCategories {
+		known[c] = true
+	}
+	for _, s := range popularServers {
+		if !known[s.Category] {
+			t.Errorf("%s has category %q, which is not in catalogCategories", s.Name, s.Category)
+		}
 	}
 }

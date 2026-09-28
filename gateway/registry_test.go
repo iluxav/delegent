@@ -30,7 +30,11 @@ func (f *fakeInstance) Close() { f.closed.Store(true) }
 
 // The fake carries no pending consents — the console surface is exercised against a real
 // gateway in console_test.go, not this HTTP-routing fake.
-func (f *fakeInstance) PendingViews(string) []PendingView { return nil }
+func (f *fakeInstance) PendingViews(string) []PendingView                        { return nil }
+func (f *fakeInstance) StopSessions(context.Context, map[string]bool) (int, int) { return 0, 0 }
+func (f *fakeInstance) CancelAgentTask(context.Context, string, string) error {
+	return errors.New("no agent")
+}
 func (f *fakeInstance) ResolvePending(string, consoleDecision) (bool, bool, string) {
 	return false, false, "no such request"
 }

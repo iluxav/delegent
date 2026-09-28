@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -202,7 +204,13 @@ func (u *a2aUpstream) Call(ctx context.Context, c UpstreamCall) (*mcp.CallToolRe
 			progress("re-attached to the running task " + taskID)
 			res, err = u.client.Wait(ctx, taskID, c.Session, progress)
 		} else {
-			res, err = u.client.Send(ctx, msg, a2a.SendOpts{Skill: sk.ID, ContextID: str("context_id"), Session: c.Session, Progress: progress})
+			// Start the task without waiting, and remember it before polling, so a stopped run
+			// can cancel it from its first moment (see cancelSessions).
+			res, err = u.client.Send(ctx, msg, a2a.SendOpts{Skill: sk.ID, ContextID: str("context_id"), Session: c.Session, NoWait: true})
+			if err == nil && res != nil && res.TaskID != "" && !a2a.Terminal(res.State) && !a2a.NeedsCaller(res.State) {
+				u.remember(key, res)
+				res, err = u.client.Wait(ctx, res.TaskID, c.Session, progress)
+			}
 		}
 		if res != nil && res.TaskID != "" {
 			u.remember(key, res)
@@ -278,6 +286,51 @@ func (u *a2aUpstream) remember(key string, res *a2a.Result) {
 	if _, ok := u.inflight[key]; !ok {
 		u.inflight[key] = inflightTask{taskID: res.TaskID, startedAt: time.Now()}
 	}
+}
+
+// CancelAgentTask cancels one task on the agent this target fronts. Only an A2A target has
+// tasks; for any other target it is an error.
+func (g *Gateway) CancelAgentTask(ctx context.Context, taskID, session string) error {
+	u, ok := g.upstream.(*a2aUpstream)
+	if !ok {
+		return errors.New("not an agent target")
+	}
+	res, err := u.client.CancelTask(ctx, taskID, session)
+	if err != nil {
+		return err
+	}
+	if res != nil && res.State != a2a.StateCanceled {
+		return fmt.Errorf("task %s is %s, not canceled", taskID, res.State)
+	}
+	return nil
+}
+
+// cancelSessions cancels, on the agent, every task this upstream started for a call made under
+// one of the given sessions (a stopped run), and forgets them. Best effort: an agent that does
+// not answer is left to finish on its own. Returns how many tasks were cancelled.
+func (u *a2aUpstream) cancelSessions(ctx context.Context, sessions map[string]bool) int {
+	type job struct{ key, taskID, session string }
+	var jobs []job
+	u.mu.Lock()
+	for key, t := range u.inflight {
+		session, _, _ := strings.Cut(key, "|")
+		if sessions[session] {
+			jobs = append(jobs, job{key, t.taskID, session})
+			delete(u.inflight, key)
+		}
+	}
+	u.mu.Unlock()
+	canceled := 0
+	for _, j := range jobs {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if _, err := u.client.CancelTask(cctx, j.taskID, j.session); err == nil {
+			canceled++
+		} else {
+			log.Printf("[delegent] stop run: cancelling task %s on %s failed: %v", j.taskID, u.card.Name, err)
+		}
+		cancel()
+	}
+	return canceled
 }
 
 // skillTool maps a skill id from message metadata to its tool name; with no id, the agent's

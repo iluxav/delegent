@@ -31,8 +31,8 @@ the approvals flow: [gateway/README.md](gateway/README.md).
 Your own agents go behind the same gateway: `delegent target add --kind a2a …` fronts an
 A2A agent's skills as tools, and an agent that calls other targets through delegent (echoing
 one header) gets its calls linked to the task it is working — consent, expiry, depth, and
-receipts across every hop. `agents/demo.sh` runs a four-agent demo; see
-[agents/README.md](agents/README.md).
+receipts across every hop. [agents/](agents/README.md) is a five-agent software team on
+local models that plans in Linear, builds in GitLab and ships to Vercel, all through Delegent.
 
 Verify a receipt trail offline — no gateway, no trust in this repo's binaries required:
 

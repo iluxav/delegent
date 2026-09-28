@@ -33,6 +33,12 @@ type webApp struct {
 	// in instead of being handed a minted key.
 	prov *provider
 
+	// plays are the playground runs started from this process (see web_play.go): what was
+	// sent and how the send ended, for the waiting page. In memory on purpose — the run's
+	// events are in the activity log, this is only the bridge to them.
+	playMu sync.Mutex
+	plays  map[string]*playRun
+
 	// adds holds "add server" wizards that are off at an OAuth provider's consent screen,
 	// keyed by the OAuth state. In memory on purpose: a serve restart mid-flow just means
 	// starting the add over, and nothing here is a secret.
@@ -93,6 +99,9 @@ func mountWeb(mux *http.ServeMux, e *env, reg *gateway.Registry) error {
 	guarded.HandleFunc("POST /targets/{id}/uses", w.saveUses)
 	guarded.HandleFunc("POST /targets/{id}/remembered/{caller}/forget", w.forgetRemembered)
 	guarded.HandleFunc("GET /relationships", w.relationshipsPage)
+	guarded.HandleFunc("GET /play/{id}", w.playPage)
+	guarded.HandleFunc("POST /play/{id}", w.playStart)
+	guarded.HandleFunc("GET /play/{id}/{nonce}", w.playWait)
 	guarded.HandleFunc("GET /targets/{id}/keys", w.agentKeysTab)
 	guarded.HandleFunc("POST /targets/{id}/keys", w.mintAgentKey)
 	guarded.HandleFunc("GET /consents/live", w.liveConsents)
@@ -101,6 +110,7 @@ func mountWeb(mux *http.ServeMux, e *env, reg *gateway.Registry) error {
 	guarded.HandleFunc("GET /runs/{id}", w.runPage)
 	guarded.HandleFunc("GET /runs/{id}/diagram", w.runDiagram)
 	guarded.HandleFunc("GET /runs/{id}/state", w.runState)
+	guarded.HandleFunc("POST /runs/{id}/stop", w.stopRun)
 	guarded.HandleFunc("GET /connect", w.connectPane)
 	guarded.HandleFunc("GET /keys", w.keysPage)
 	guarded.HandleFunc("POST /keys", w.mintKey)

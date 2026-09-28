@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"delegent.dev/gateway/a2a"
 	"delegent.dev/gateway/store"
 )
 
@@ -400,5 +403,284 @@ func TestAccessTabAndAgentKeys(t *testing.T) {
 	post(t, c, ts.URL+"/targets/gh/remembered/planner/forget", nil, true)
 	if _, err := e.st.GetRemembered(ctx, "planner", "gh"); err == nil {
 		t.Fatal("forget did not remove the row")
+	}
+}
+
+// fakeAgent is a minimal A2A agent for the playground test: a card with one skill and an
+// example, and message/send answering with a message.
+func fakeAgent(t *testing.T) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /.well-known/agent-card.json", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(a2a.Card{Name: "Planner", URL: srv.URL + "/", Skills: []a2a.Skill{{ID: "plan_trip", Name: "Plan a trip", Description: "Plans a trip.", Examples: []string{"plan a trip to Lisbon"}}}})
+	})
+	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Params struct {
+				Message a2a.Message `json:"message"`
+			} `json:"params"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		reply := a2a.Message{Kind: "message", Role: "agent", MessageID: "r1", Parts: []a2a.Part{a2a.TextPart("itinerary for: " + a2a.PartsText(req.Params.Message.Parts))}}
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": reply})
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The playground runs an agent as the operator's own client: the page offers the card's
+// skills with the example prefilled, Run sends the message through the guarded A2A path and
+// parks the person on a waiting page that turns into the live run once its first event is
+// logged, and the run is listed as the playground's.
+func TestPlayground(t *testing.T) {
+	t.Setenv("DELEGENT_AUTOGRANT", "1") // the plumbing, not the consent dialog, is under test
+	ts, e, logs := newDashboard(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+	agent := fakeAgent(t)
+	post(t, c, ts.URL+"/targets", url.Values{"name": {"planner"}, "kind": {"a2a"}, "endpoint": {agent.URL}, "credential": {"planner-secret"}}, true)
+	if _, err := e.st.GetTarget(context.Background(), "planner"); err != nil {
+		t.Fatalf("planner not registered: %v", err)
+	}
+
+	_, body := get(t, c, ts.URL+"/play/planner")
+	if !strings.Contains(body, "Run planner") || !strings.Contains(body, `value="plan_trip"`) || !strings.Contains(body, "plan a trip to Lisbon</textarea>") {
+		t.Fatalf("playground page lacks the skill or the prefilled example:\n%s", body[:min(len(body), 1200)])
+	}
+	// a freshly drafted skill is unclassified: the page says so, and classifying clears it
+	if !strings.Contains(body, "Not classified yet: plan_trip") {
+		t.Fatalf("playground must warn about unclassified skills:\n%s", body[:min(len(body), 1200)])
+	}
+	post(t, c, ts.URL+"/targets/planner/policy", url.Values{"tool": {"plan_trip", "get_task"}, "effect.plan_trip": {"read"}, "scope.plan_trip": {"trip:read"}, "effect.get_task": {"read"}, "scope.get_task": {"trip:read"}}, true)
+	if _, body := get(t, c, ts.URL+"/play/planner"); strings.Contains(body, "Not classified yet") {
+		t.Fatal("classified skills must not be flagged")
+	}
+	if _, body := get(t, c, ts.URL+"/targets/planner/access"); !strings.Contains(body, `href="/play/planner"`) {
+		t.Fatal("the agent's page must offer Run")
+	}
+	// an empty message is refused on the page
+	if _, body := post(t, c, ts.URL+"/play/planner", url.Values{"skill": {"plan_trip"}, "message": {" "}}, true); !strings.Contains(body, "write the message") {
+		t.Fatalf("empty message must be refused:\n%s", body[:min(len(body), 400)])
+	}
+	res, _ := post(t, c, ts.URL+"/play/planner", url.Values{"skill": {"plan_trip"}, "message": {"plan a trip to Oslo"}}, true)
+	wait := res.Header.Get("HX-Redirect")
+	if !strings.HasPrefix(wait, "/play/planner/") {
+		t.Fatalf("Run must send the person to the waiting page, got %q", wait)
+	}
+	// the waiting page becomes the live run once the first event is logged
+	var runBody string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		_, runBody = get(t, c, ts.URL+wait) // the client follows the redirect to /runs/<root>
+		if strings.Contains(runBody, "RUN DETAILS") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.Contains(runBody, "RUN DETAILS") || !strings.Contains(runBody, "plan a trip to Oslo") {
+		at := max(strings.Index(runBody, "PLAYGROUND"), 0)
+		t.Fatalf("waiting page never turned into the run:\n%s\n--- logs ---\n%s", runBody[at:min(len(runBody), at+900)], logs.String())
+	}
+	if _, body := get(t, c, ts.URL+"/runs"); !strings.Contains(body, "playground") {
+		t.Fatalf("the run must be listed as the playground's:\n%s", body[:min(len(body), 800)])
+	}
+	// the answer came back through the guarded path and is on the run's timeline
+	root := regexp.MustCompile(`data-run-flow="/runs/([^/"]+)/state"`).FindStringSubmatch(runBody)
+	if root == nil {
+		t.Fatalf("run page carries no root:\n%s", runBody[:min(len(runBody), 600)])
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, body := get(t, c, ts.URL+"/runs/"+root[1]+"/diagram"); strings.Contains(body, "itinerary for: plan a trip to Oslo") {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("the agent's answer never reached the run")
+}
+
+// A key minted in the dashboard keeps its own name ("pm prod") and is tied to its agent only
+// by AgentTargetID: its calls must land on the agent's lifeline, so the agent is one
+// participant and not two. A person's key with the same prefix but another name is untouched.
+func TestAgentKeyNamedFreelyJoinsItsAgent(t *testing.T) {
+	withPrefix := func(p string) func(*store.Event) { return func(e *store.Event) { e.KeyPrefix = p } }
+	events := []*store.Event{
+		ev(store.EventToolCall, "playground", "pm", "plan_project", "", "", 1, params("plan a site")),
+		ev(store.EventPermissionGranted, "playground", "pm", "plan_project", "sess_root", "", 2, nil),
+		ev(store.EventToolCall, "playground", "pm", "plan_project", "sess_root", "", 3, params("plan a site")),
+		ev(store.EventToolCall, "pm prod", "linear", "save_project", "", "sess_root", 4, withPrefix("dgk_pm01")),
+		ev(store.EventPermissionGranted, "pm prod", "linear", "", "sess_child", "sess_root", 4, nil), // a console decision: name, no prefix
+		ev(store.EventToolResponse, "pm prod", "linear", "save_project", "sess_child", "sess_root", 5, func(e *store.Event) { e.KeyPrefix = "dgk_pm01"; result("P-1")(e) }),
+		ev(store.EventToolCall, "laptop", "linear", "list_teams", "", "", 6, withPrefix("dgk_pm01")),
+	}
+	keys := []*store.AgentKey{
+		{Prefix: "dgk_pm01", Name: "pm prod", AgentTargetID: "pm"},
+		{Prefix: "dgk_pm01", Name: "laptop"}, // a person's key: not an agent's
+	}
+	// A name shared by two keys is never matched on the name alone.
+	shared := []*store.Event{ev(store.EventPermissionGranted, "twin", "linear", "", "s", "", 1, nil)}
+	attributeAgentKeys(shared, []*store.AgentKey{{Prefix: "a", Name: "twin", AgentTargetID: "pm"}, {Prefix: "b", Name: "twin"}})
+	if shared[0].KeyName != "twin" {
+		t.Fatalf("an ambiguous name was attributed: %q", shared[0].KeyName)
+	}
+	attributeAgentKeys(events, keys)
+	for _, i := range []int{3, 4, 5} {
+		if events[i].KeyName != "agent:pm" {
+			t.Fatalf("row %d: the agent's key was not attributed: %q", i, events[i].KeyName)
+		}
+	}
+	if events[6].KeyName != "laptop" {
+		t.Fatalf("a person's key was relabelled: %q", events[6].KeyName)
+	}
+	runs := buildRuns(events)
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs, want 1", len(runs))
+	}
+	var names []string
+	for _, p := range runs[0].Participants {
+		names = append(names, p.Name)
+	}
+	if got := strings.Join(names, ","); got != "you,playground,pm,linear" {
+		t.Errorf("participants = %s, want you,playground,pm,linear (pm once, no 'pm prod')", got)
+	}
+}
+
+// Stopping a run from its page: the page offers it while the run is going, the stop revokes
+// every session in it and is recorded, and afterwards the run reads "stopped" with nothing
+// left to stop. Another operator's run cannot be stopped.
+func TestStopRunFromTheDashboard(t *testing.T) {
+	ts, e, logs := newDashboard(t)
+	c := browser(t)
+	get(t, c, ts.URL+"/setup")
+	code := codeRE.FindStringSubmatch(logs.String())[1]
+	post(t, c, ts.URL+"/setup", url.Values{"code": {code}, "username": {"op"}, "password": {"longenough"}, "confirm": {"longenough"}}, false)
+
+	ctx := context.Background()
+	for _, s := range []*store.Session{
+		{Handle: "sess_root", Principal: e.operator},
+		{Handle: "sess_hop", Principal: e.operator, ParentHandle: "sess_root"},
+		{Handle: "sess_theirs", Principal: "usr_someone_else"},
+	} {
+		if err := e.st.PutSession(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UnixMilli()
+	for _, ev := range []*store.Event{
+		{Type: store.EventToolCall, KeyName: "playground", TargetID: "pm", Tool: "plan_project", SessionHandle: "sess_root", CreatedAt: now},
+		{Type: store.EventToolCall, KeyName: "agent:pm", TargetID: "engineer", Tool: "build_feature", SessionHandle: "sess_hop", ParentHandle: "sess_root", CreatedAt: now + 1},
+	} {
+		ev.UserID = e.operator
+		if err := e.st.AppendEvent(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, page := get(t, c, ts.URL+"/runs/sess_root")
+	if !strings.Contains(page, `hx-post="/runs/sess_root/stop"`) {
+		t.Fatal("a running run should offer Stop run")
+	}
+	_, page = post(t, c, ts.URL+"/runs/sess_root/stop", url.Values{}, true)
+	if !strings.Contains(page, "Run stopped. 2 sessions revoked") {
+		t.Errorf("no stop notice in the page:\n%s", excerptAround(page, "run-notice"))
+	}
+	if strings.Contains(page, `hx-post="/runs/sess_root/stop"`) {
+		t.Error("a stopped run should not offer Stop run again")
+	}
+	for _, h := range []string{"sess_root", "sess_hop"} {
+		if ss, _ := e.st.GetSession(ctx, h); ss.RevokedAt == 0 {
+			t.Errorf("%s still live after the stop", h)
+		}
+	}
+	x := findTestRun(t, ts, c, "sess_root")
+	if x.Status != "stopped" || x.StatusTone != "bad" {
+		t.Errorf("status = %q %q, want stopped", x.Status, x.StatusTone)
+	}
+
+	_, page = post(t, c, ts.URL+"/runs/sess_theirs/stop", url.Values{}, true)
+	if ss, _ := e.st.GetSession(ctx, "sess_theirs"); ss.RevokedAt != 0 || !strings.Contains(page, "No run under") {
+		t.Error("another operator's run was stopped")
+	}
+}
+
+// findTestRun reads a run's live state the way the page polls it.
+func findTestRun(t *testing.T, ts *httptest.Server, c *http.Client, root string) struct{ Status, StatusTone string } {
+	t.Helper()
+	res, err := c.Get(ts.URL + "/runs/" + root + "/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		Status     string `json:"status"`
+		StatusTone string `json:"status_tone"`
+	}
+	json.NewDecoder(res.Body).Decode(&out)
+	return struct{ Status, StatusTone string }{out.Status, out.StatusTone}
+}
+
+func excerptAround(s, marker string) string {
+	i := strings.Index(s, marker)
+	if i < 0 {
+		return "(" + marker + " not found)"
+	}
+	end := i + 300
+	if end > len(s) {
+		end = len(s)
+	}
+	return s[i:end]
+}
+
+// A reply that arrives after its run was stopped carries no session (it was revoked); it stays
+// with its own run's connection and is not adopted by the next run of the same key and target.
+func TestLateReplyStaysWithItsRun(t *testing.T) {
+	onConn := func(c string) func(*store.Event) { return func(e *store.Event) { e.ConnID = c } }
+	events := []*store.Event{
+		ev(store.EventToolCall, "tester", "slow", "work", "sess_1", "", 1, onConn("c1")),
+		ev(store.EventRunStopped, "", "", "", "sess_1", "", 2, nil),
+		ev(store.EventToolResponse, "tester", "slow", "work", "", "", 3, func(e *store.Event) { e.ConnID = "c1"; result("canceled")(e) }),
+		ev(store.EventToolCall, "tester", "slow", "work", "sess_2", "", 4, onConn("c2")),
+	}
+	runs := buildRuns(events)
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs, want 2", len(runs))
+	}
+	byRoot := map[string]*run{}
+	for _, r := range runs {
+		byRoot[r.Root] = r
+	}
+	if n := len(byRoot["sess_1"].events); n != 3 {
+		t.Errorf("the stopped run has %d events, want 3 (its late reply included)", n)
+	}
+	if n := len(byRoot["sess_2"].events); n != 1 {
+		t.Errorf("the next run adopted %d events, want only its own 1", n)
+	}
+	if byRoot["sess_1"].Status != "stopped" {
+		t.Errorf("status = %q", byRoot["sess_1"].Status)
+	}
+}
+
+// The unfinished agent tasks of a run are read from its log: the latest reply for each task
+// decides, so a task that later completed is left out.
+func TestUnfinishedTasksFromTheLog(t *testing.T) {
+	reply := func(taskID, state string) func(*store.Event) {
+		return func(e *store.Event) {
+			e.Result, _ = json.Marshal(map[string]any{"structuredContent": map[string]any{"task_id": taskID, "state": state}})
+		}
+	}
+	x := &run{events: []*store.Event{
+		ev(store.EventToolResponse, "agent:pm", "engineer", "build_feature", "sess_hop", "sess_root", 1, reply("t1", "working")),
+		ev(store.EventToolResponse, "agent:pm", "designer", "define", "sess_hop2", "sess_root", 2, reply("t2", "working")),
+		ev(store.EventToolResponse, "agent:pm", "designer", "get_task", "sess_hop2", "sess_root", 3, reply("t2", "completed")),
+		ev(store.EventToolResponse, "agent:pm", "linear", "save_issue", "sess_hop3", "sess_root", 4, result("TES-1")),
+	}}
+	got := unfinishedTasks(x)
+	if len(got) != 1 || got[0].Target != "engineer" || got[0].TaskID != "t1" || got[0].Session != "sess_hop" {
+		t.Errorf("unfinished = %+v", got)
 	}
 }

@@ -189,6 +189,56 @@
     content.scrollTop = 0;
   }
 
+  // The add page's catalog: every word of the search must match a tile (name, blurb, host,
+  // category), within the chosen category chip. A search that looks like a URL offers to
+  // carry it over to the connect-by-URL form.
+  function filterCatalog() {
+    const search = $('#catalog-search');
+    if (!search) return;
+    const raw = search.value.trim();
+    const words = raw.toLowerCase().split(/\s+/).filter(Boolean);
+    const cat = $('.chip.is-on')?.dataset.cat || '';
+    let total = 0;
+    $$('.catalog-group').forEach((group) => {
+      let shown = 0;
+      $$('[data-tile]', group).forEach((tile) => {
+        const hay = tile.dataset.search;
+        tile.hidden = (cat && tile.dataset.cat !== cat) || !words.every((w) => hay.includes(w));
+        if (!tile.hidden) shown++;
+      });
+      group.hidden = shown === 0;
+      $('[data-group-count]', group).textContent = shown;
+      total += shown;
+    });
+    const empty = $('#catalog-empty');
+    empty.hidden = total > 0;
+    $('#catalog-term').textContent = raw ? '“' + raw + '”' : 'this filter';
+    $('#catalog-use-url').hidden = !/^(https?:\/\/)?[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$|^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/\S*)?$/i.test(raw);
+  }
+
+  // A name for a pasted endpoint, until the operator types their own: the host's most telling
+  // label (mcp.linear.app → Linear), or "Local 7101" for a local port.
+  function suggestName() {
+    const name = $('#name');
+    const endpoint = $('#endpoint');
+    if (!name || !endpoint || endpoint.readOnly) return;
+    if (name.value && name.value !== name.dataset.suggested) return;
+    let suggestion = '';
+    try {
+      const u = new URL(endpoint.value);
+      if (u.hostname === 'localhost' || /^[\d.]+$|^\[/.test(u.hostname)) {
+        suggestion = ('Local ' + u.port).trim();
+      } else {
+        const labels = u.hostname.split('.').slice(0, -1).filter((l) => !['mcp', 'api', 'www', 'app', 'ai', 'bindings'].includes(l));
+        const label = (labels.pop() || '').replace(/-?mcp-?/g, '');
+        suggestion = label ? label[0].toUpperCase() + label.slice(1) : '';
+      }
+    } catch { /* not a URL yet */ }
+    name.value = suggestion;
+    name.dataset.suggested = suggestion;
+    initialize();
+  }
+
   function initialize() {
     observeTargetNavigation();
     prepareToolDescriptions();
@@ -205,7 +255,7 @@
       link.classList.toggle('is-active', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
-    $('#workspace-location').textContent = target === 'new' ? 'Connect a server' : target ? ($('.target-title h2')?.textContent || 'Server') : page === 'keys' ? 'Keys' : page === 'runs' ? 'Agent runs' : page === 'relationships' ? 'Relationships' : 'Overview';
+    $('#workspace-location').textContent = target === 'new' ? 'Connect a server' : target ? ($('.target-title h2')?.textContent || 'Server') : page === 'keys' ? 'Keys' : page === 'runs' ? 'Agent runs' : page === 'relationships' ? 'Relationships' : page === 'play' ? 'Playground' : 'Overview';
     $$('.server-link').forEach((link) => {
       const selected = link.dataset.server === target;
       link.classList.toggle('is-active', selected);
@@ -241,6 +291,8 @@
       $('#server-no-results').hidden = count > 0;
     }
     if (el.id === 'tool-search') filterTools();
+    if (el.id === 'catalog-search') filterCatalog();
+    if (el.id === 'endpoint') suggestName();
     if (el.id === 'client-search') filterClients();
     updateDirty(el);
   });
@@ -256,6 +308,10 @@
   }
 
   document.addEventListener('change', (event) => {
+    if (event.target.name === 'kind' && event.target.closest('.kind-toggle')) {
+      $$('[data-kind-hint]').forEach((hint) => { hint.hidden = hint.dataset.kindHint !== event.target.value; });
+      $('#endpoint').placeholder = event.target.value === 'a2a' ? 'https://agent.example.com' : 'https://mcp.example.com/mcp';
+    }
     const el = event.target;
     if (el.matches('select[data-fx]')) {
       el.className = el.className.replace(/\bfx-\w+/, 'fx-' + el.value);
@@ -274,6 +330,21 @@
   }, true);
 
   document.addEventListener('click', async (event) => {
+    const chip = event.target.closest('.chip[data-cat]');
+    if (chip) {
+      $$('.chip[data-cat]').forEach((c) => { const on = c === chip; c.classList.toggle('is-on', on); c.setAttribute('aria-pressed', on); });
+      filterCatalog();
+      return;
+    }
+    if (event.target.closest('#catalog-use-url')) {
+      const raw = $('#catalog-search').value.trim();
+      const endpoint = $('#endpoint');
+      endpoint.value = /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+      suggestName();
+      endpoint.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      $('#name').focus({ preventScroll: true });
+      return;
+    }
     if (event.target.closest('#client-picker-trigger')) {
       setClientPicker($('#client-picker-menu').hidden);
       return;
@@ -426,6 +497,17 @@
     $('#connect .connect-content').scrollTop = connectionScrollTop;
     const field = document.getElementById(connectionFocusID);
     if (field && $('#connect').contains(field)) field.focus({ preventScroll: true });
+  });
+  body.addEventListener('change', (event) => {
+    const radio = event.target;
+    if (radio.name !== 'skill' || !radio.closest('.play-form')) return;
+    const message = $('textarea[name="message"]', radio.closest('.play-form'));
+    if (!message || (message.value.trim() && message.dataset.auto !== '1')) return;
+    message.value = radio.dataset.example || '';
+    message.dataset.auto = '1';
+  });
+  body.addEventListener('input', (event) => {
+    if (event.target.matches('.play-form textarea[name="message"]')) delete event.target.dataset.auto;
   });
   body.addEventListener('htmx:afterSwap', (event) => {
     if (event.target.id === 'consentpop') {

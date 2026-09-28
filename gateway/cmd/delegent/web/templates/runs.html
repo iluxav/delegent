@@ -43,7 +43,8 @@
 {{define "runPage"}}
 <div class="workspace-page run-page" data-page="runs">
 <a class="page-back" href="/runs" hx-get="/runs" hx-target="#main" hx-push-url="true"><span aria-hidden="true">←</span> All agent runs</a>
-<header class="page-heading run-heading"><div><span class="eyebrow">RUN DETAILS</span><h1>{{.Title}}</h1><p>Started {{.Started}} <span aria-hidden="true">·</span> {{.Harness}}</p><code class="run-session" title="Session {{.Root}}">{{.Root}}</code></div></header>
+<header class="page-heading run-heading"><div><span class="eyebrow">RUN DETAILS</span><h1>{{.Title}}</h1><p>Started {{.Started}} <span aria-hidden="true">·</span> {{.Harness}}</p><code class="run-session" title="Session {{.Root}}">{{.Root}}</code></div>{{if .Stoppable}}<form class="run-stop" data-stop-run hx-post="/runs/{{.Root}}/stop" hx-target="#main" hx-disabled-elt="find button" hx-confirm="Stop this run? Every agent in it loses its access at once, waiting approvals are denied, and agent tasks still running are cancelled. This cannot be undone."><button class="btn text-bad" type="submit">Stop run</button></form>{{end}}</header>
+{{if .Notice}}<p class="run-notice" role="status">{{.Notice}}</p>{{end}}
 <section class="run-flow" data-run-flow="/runs/{{.Root}}/state" aria-label="Live flow">
   <div class="run-flow-bar">
     <div class="run-flow-heading"><h2>Execution flow</h2><span data-flow-note>Connecting…</span></div>

@@ -10,11 +10,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
+	"delegent.dev/gateway"
 	"delegent.dev/gateway/store"
 )
 
@@ -28,7 +31,7 @@ type runParticipant struct {
 // runRow is one arrow: something passed from one participant to another.
 type runRow struct {
 	Time    string
-	Kind    string // call | ask | grant | deny | reply | error
+	Kind    string // call | ask | grant | deny | reply | error | stop
 	From    int    // participant index
 	To      int
 	Label   string // the short verb: a tool name, "approval?", "approved", "denied", "reply"
@@ -65,6 +68,9 @@ type run struct {
 	pendingCount int
 	openCalls    int
 	badRows      int
+	stopped      bool   // a human stopped the run
+	live         bool   // its root session still confers access (set by the page handler)
+	Notice       string // shown once on the run page, after an action on it
 	events       []*store.Event
 }
 
@@ -151,6 +157,10 @@ func buildRuns(events []*store.Event) []*run {
 			if len(r.events) > 0 && r.events[0].CreatedAt < r.StartedAt {
 				r.StartedAt = r.events[0].CreatedAt
 			}
+		case e.SessionHandle == "" && e.ParentHandle == "" && e.ConnID != "" && byConn[e.ConnID] != nil:
+			// No session (for example a reply that arrived after the run was stopped and its
+			// session revoked), on a connection that already has a run: it is that run's.
+			r = byConn[e.ConnID]
 		case e.SessionHandle == "" && e.ParentHandle == "":
 			k := orphanKey(e)
 			pending[k] = append(pending[k], e)
@@ -297,6 +307,18 @@ func (r *run) layout() {
 				open[target]--
 			}
 			delete(awaiting, target)
+		case store.EventRunStopped:
+			// You stopped the run: the arrow goes to whoever you started it through.
+			to := you
+			if r.Harness != "" {
+				to = add(r.Harness, "harness")
+			} else if len(r.Participants) > 1 {
+				to = 1
+			}
+			row.Kind, row.From, row.To, row.Label, row.Tone = "stop", you, to, "stopped the run", "bad"
+			row.Full = e.Reason
+			row.Text = excerpt(row.Full, runTextN)
+			r.stopped = true
 		case store.EventError:
 			from := add(target, "agent")
 			to := add(caller, kindOf(caller, r.Harness))
@@ -326,7 +348,16 @@ func (r *run) layout() {
 			r.pendingCount++
 		}
 	}
+	if r.stopped {
+		// Nothing in a stopped run is still waiting on you or working.
+		for i := range r.Rows {
+			r.Rows[i].Pending = false
+		}
+		r.pendingCount = 0
+	}
 	switch {
+	case r.stopped:
+		r.Status, r.StatusTone = "stopped", "bad"
 	case r.pendingCount > 0:
 		r.Status, r.StatusTone = "waiting for your approval", "warn"
 	case r.openCalls > 0:
@@ -466,7 +497,44 @@ func (w *webApp) loadRuns(r *http.Request) []*run {
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 { // newest-first → ascending
 		rows[i], rows[j] = rows[j], rows[i]
 	}
+	if keys, err := w.e.st.ListAgentKeys(r.Context(), w.e.operator); err == nil {
+		attributeAgentKeys(rows, keys)
+	}
 	return buildRuns(rows)
+}
+
+// attributeAgentKeys puts every call made with a key issued to an agent on that agent's
+// lifeline, whatever the key is called. A key minted on the command line is named
+// "agent:<id>", which callerOf reads directly; a key minted in the dashboard carries its own
+// name ("pm prod") and only its AgentTargetID says whose it is. Such rows are relabelled
+// "agent:<id>" here, so one agent never shows up as two participants. A key is matched on
+// prefix and name together. A console decision records the key's name but no prefix; it is
+// matched on the name alone, and only when that name belongs to exactly one key, an agent's.
+func attributeAgentKeys(events []*store.Event, keys []*store.AgentKey) {
+	agentOf := map[string]string{}
+	byName := map[string]string{} // name → agent, "" when the name is shared or a person's
+	for _, k := range keys {
+		if k.AgentTargetID != "" {
+			agentOf[k.Prefix+"|"+k.Name] = k.AgentTargetID
+		}
+		if _, seen := byName[k.Name]; seen {
+			byName[k.Name] = ""
+		} else {
+			byName[k.Name] = k.AgentTargetID
+		}
+	}
+	for _, e := range events {
+		if strings.HasPrefix(e.KeyName, "agent:") {
+			continue
+		}
+		id := agentOf[e.KeyPrefix+"|"+e.KeyName]
+		if id == "" && e.KeyPrefix == "" {
+			id = byName[e.KeyName]
+		}
+		if id != "" {
+			e.KeyName = "agent:" + id
+		}
+	}
 }
 
 func typeRank(t string) int {
@@ -492,6 +560,17 @@ func (w *webApp) findRun(r *http.Request, root string) *run {
 	return nil
 }
 
+// findRunByConn finds the run of one client connection — how a playground run is located
+// from the connection id its events carry.
+func (w *webApp) findRunByConn(r *http.Request, conn string) *run {
+	for _, x := range w.loadRuns(r) {
+		if x.conn == conn {
+			return x
+		}
+	}
+	return nil
+}
+
 func (w *webApp) runsPage(rw http.ResponseWriter, r *http.Request) {
 	runs := w.loadRuns(r)
 	running, waiting := 0, 0
@@ -505,12 +584,116 @@ func (w *webApp) runsPage(rw http.ResponseWriter, r *http.Request) {
 	w.page(rw, r, "", "runsPage", map[string]any{"Runs": runs, "Running": running, "Waiting": waiting})
 }
 
+// Stoppable reports whether stopping the run would still do something: it is going (a call
+// or an ask is open), or it still holds access — an agent task can outlive the call that
+// started it, and a finished run's sessions stay live until they expire.
+func (r *run) Stoppable() bool {
+	return !r.stopped && (r.pendingCount > 0 || r.openCalls > 0 || r.live)
+}
+
+// markLive records whether the run's root session still confers access.
+func (w *webApp) markLive(r *http.Request, x *run) {
+	ss, err := w.e.st.GetSession(r.Context(), x.Root)
+	x.live = err == nil && ss.RevokedAt == 0 && (ss.ExpiresAt == 0 || ss.ExpiresAt > time.Now().UnixMilli())
+}
+
+// stopRun stops a whole run: every session in it is revoked, its waiting asks are denied, and
+// the agent tasks it started are cancelled on the agents (see Registry.StopRun).
+func (w *webApp) stopRun(rw http.ResponseWriter, r *http.Request) {
+	root := r.PathValue("id")
+	var known []gateway.RunTask
+	if x := w.findRun(r, root); x != nil {
+		known = unfinishedTasks(x)
+	}
+	rep, err := w.reg.StopRun(w.e.operator, root, known...)
+	if errors.Is(err, gateway.ErrNoSuchRun) {
+		w.page(rw, r, "", "runMissing", map[string]any{"Root": root})
+		return
+	}
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	x := w.findRun(r, root)
+	if x == nil {
+		w.page(rw, r, "", "runMissing", map[string]any{"Root": root})
+		return
+	}
+	x.Notice = stopNotice(rep)
+	w.markLive(r, x)
+	w.page(rw, r, "", "runPage", x)
+}
+
+// unfinishedTasks lists the agent tasks a run's log last saw still going: each agent reply
+// carries its task's id and state (structuredContent), and a later reply for the same task
+// supersedes an earlier one.
+func unfinishedTasks(x *run) []gateway.RunTask {
+	type seen struct {
+		task  gateway.RunTask
+		state string
+	}
+	last := map[string]seen{}
+	var order []string
+	for _, e := range x.events {
+		if e.Type != store.EventToolResponse || len(e.Result) == 0 || e.SessionHandle == "" {
+			continue
+		}
+		var res struct {
+			Structured struct {
+				TaskID string `json:"task_id"`
+				State  string `json:"state"`
+			} `json:"structuredContent"`
+		}
+		if json.Unmarshal(e.Result, &res) != nil || res.Structured.TaskID == "" {
+			continue
+		}
+		k := e.TargetID + "|" + res.Structured.TaskID
+		if _, ok := last[k]; !ok {
+			order = append(order, k)
+		}
+		last[k] = seen{gateway.RunTask{Target: e.TargetID, TaskID: res.Structured.TaskID, Session: e.SessionHandle}, res.Structured.State}
+	}
+	var out []gateway.RunTask
+	for _, k := range order {
+		switch last[k].state {
+		case "completed", "failed", "canceled", "rejected":
+			continue
+		}
+		out = append(out, last[k].task)
+	}
+	return out
+}
+
+func stopNotice(rep gateway.StopReport) string {
+	n := "Run stopped. "
+	if rep.Sessions == 0 {
+		n += "Its sessions had already ended with a gateway restart"
+	} else {
+		n += plural(rep.Revoked, "session") + " revoked"
+	}
+	if rep.Canceled > 0 {
+		n += ", " + plural(rep.Canceled, "agent task") + " cancelled"
+	}
+	if rep.Denied > 0 {
+		n += ", " + plural(rep.Denied, "waiting approval") + " denied"
+	}
+	return n + ". Any agent still working can make no further calls."
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 func (w *webApp) runPage(rw http.ResponseWriter, r *http.Request) {
 	x := w.findRun(r, r.PathValue("id"))
 	if x == nil {
 		w.page(rw, r, "", "runMissing", map[string]any{"Root": r.PathValue("id")})
 		return
 	}
+	w.markLive(r, x)
 	w.page(rw, r, "", "runPage", x)
 }
 

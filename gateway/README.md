@@ -111,7 +111,7 @@ still running after `DELEGENT_A2A_WAIT` (default 25s, under most clients' tool-c
 is handed back with its id for `get_task`, and a client that re-sends the same request is
 attached to the running task rather than starting a second one. A task the agent parks on
 `input-required` likewise comes back with a `get_task` handle to resume it.
-`agents/demo.sh` in the repository stands up a four-agent walkthrough.
+`agents/` in the repository is a five-agent team built this way.
 
 ## Dashboard
 
@@ -135,6 +135,11 @@ A terminal dashboard over everything above — four tabs:
   packet along the edge between them, with the message it carried; a box glows while its
   agent works and pulses amber while it waits on you. Replay plays a finished run again. A
   sequence diagram with the full payloads sits underneath.
+- **Playground** — **Run** on any agent's page (and on its box in the Relationships map)
+  opens it: pick a skill from the agent's card, the example is prefilled, write the task, Run.
+  The message goes through the same guarded A2A path an outside client would use, as your own
+  client, and you land on the live run while it works; an ask lands in the approval popup.
+  A skill that is not classified yet is flagged on the page, since the guarded path refuses it.
 - **Alerts** — pending consent asks as they happen (badge + terminal bell from any tab):
   approve with a per-scope picker + TTL/budget, or deny.
 
