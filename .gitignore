@@ -11,3 +11,7 @@ agents/demo-agent
 agents/demo-call
 agents/web-mcp
 agents/
+
+# Working notes, kept local
+TODO.md
+ISSUES.md
