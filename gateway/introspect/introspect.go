@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"delegent.dev/gateway/origin"
 )
 
 // DraftTool is one upstream tool with its suggested classification.
@@ -43,13 +45,19 @@ type Result struct {
 	Tools []DraftTool `json:"tools"`
 }
 
-// authTransport attaches the credential as a Bearer header on the introspection connection.
+// authTransport attaches the credential as a Bearer header on the introspection connection,
+// and only on requests to the endpoint's own origin: one the client makes while following a
+// redirect to another host goes without it (see package origin).
 type authTransport struct {
 	cred string
 	base http.RoundTripper
+	to   origin.Origin
 }
 
 func (a *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !a.to.Has(r.URL) {
+		return a.base.RoundTrip(r)
+	}
 	r = r.Clone(r.Context())
 	r.Header.Set("Authorization", "Bearer "+a.cred)
 	return a.base.RoundTrip(r)
@@ -60,7 +68,7 @@ func (a *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func Introspect(ctx context.Context, endpoint, credential string) (*Result, error) {
 	httpClient := &http.Client{}
 	if credential != "" {
-		httpClient.Transport = &authTransport{cred: credential, base: http.DefaultTransport}
+		httpClient.Transport = &authTransport{cred: credential, base: http.DefaultTransport, to: origin.Of(endpoint)}
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "delegent-introspect", Version: "0.1.0"}, nil)
 	sess, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient}, nil)

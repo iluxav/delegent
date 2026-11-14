@@ -78,6 +78,9 @@ func targetAdd(args []string) error {
 		fmt.Printf("fetching agent card from %s …\n", *endpoint)
 		var card *a2a.Card
 		res, card, err = a2a.Introspect(ctx, *endpoint, *credential)
+		if errors.Is(err, a2a.ErrCardOrigin) {
+			return err // the card was read; the message already says what is wrong and what to do
+		}
 		if err != nil {
 			return fmt.Errorf("could not read the agent card (is the agent up, and does it publish %s?): %w", a2a.WellKnownPath, err)
 		}

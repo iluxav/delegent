@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"delegent.dev/gateway/origin"
 )
 
 // SessionHeader carries the caller's Delegent session handle to the agent. An agent that is
@@ -207,10 +209,18 @@ type rpcResponse struct {
 
 // --- card discovery ---
 
+// ErrCardOrigin is what FetchCard returns for a card whose URL is not on the origin of the
+// endpoint the operator configured.
+var ErrCardOrigin = errors.New("agent card names a URL on another origin")
+
 // FetchCard resolves an agent's card from an endpoint the operator typed: the URL itself when
 // it already names a card, else `<endpoint>/.well-known/agent-card.json`, else the same path at
 // the endpoint's origin. credential (optional) is sent as a Bearer on every attempt, since some
 // agents gate the card too.
+//
+// The card's URL is where every call is sent, with the target's credential, and the card is
+// written by the agent. FetchCard therefore refuses a card whose URL is not on the endpoint's
+// own origin (ErrCardOrigin): a returned card always names the origin the operator configured.
 func FetchCard(ctx context.Context, endpoint, credential string) (*Card, error) {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -222,9 +232,9 @@ func FetchCard(ctx context.Context, endpoint, credential string) (*Card, error) 
 	} else {
 		base := strings.TrimSuffix(u.String(), "/")
 		candidates = append(candidates, base+WellKnownPath)
-		origin := u.Scheme + "://" + u.Host
-		if origin+WellKnownPath != base+WellKnownPath {
-			candidates = append(candidates, origin+WellKnownPath)
+		root := u.Scheme + "://" + u.Host
+		if root+WellKnownPath != base+WellKnownPath {
+			candidates = append(candidates, root+WellKnownPath)
 		}
 	}
 	var lastErr error
@@ -235,11 +245,73 @@ func FetchCard(ctx context.Context, endpoint, credential string) (*Card, error) 
 				// A card with no URL: the agent lives where the card was found (minus the path).
 				card.URL = u.Scheme + "://" + u.Host + strings.TrimSuffix(u.Path, "/")
 			}
+			if err := checkCardOrigin(u, c, card.URL); err != nil {
+				return nil, err
+			}
 			return card, nil
 		}
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// checkCardOrigin refuses a card URL that is not on the endpoint's origin: the same scheme,
+// host and port. Without it, whoever controls what the endpoint answers chooses the host that
+// receives the target's credential, the caller's session handle and every message.
+func checkCardOrigin(endpoint *url.URL, foundAt, cardURL string) error {
+	if cu, err := url.Parse(cardURL); err == nil && origin.OfURL(endpoint).Has(cu) {
+		return nil
+	}
+	return fmt.Errorf("%w: the card at %s gives %q, but the endpoint is %s://%s; calls and the credential are only sent to the endpoint's own scheme, host and port (to use the card's address, set it as the target's endpoint)",
+		ErrCardOrigin, foundAt, cardURL, endpoint.Scheme, endpoint.Host)
+}
+
+// ErrRedirectOrigin is the error under a request that an agent answered with a redirect to
+// another origin.
+var ErrRedirectOrigin = errors.New("redirect to another origin refused")
+
+// maxRedirects is the limit net/http applies by itself only when a client has no CheckRedirect.
+const maxRedirects = 10
+
+// sameOriginRedirects is the redirect policy for every request to an agent: a redirect is
+// followed only while it stays on the origin (scheme, host and port) of the request it started
+// from.
+//
+// The credential and the caller's session handle are headers on the request, and net/http
+// carries them along a redirect to another port on the same host or to a subdomain; the body
+// follows a 307 or 308 anywhere. An agent, or whoever answers in its place, could otherwise
+// have all three delivered to a server of its choosing.
+func sameOriginRedirects(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if first := via[0].URL; !origin.OfURL(first).Has(req.URL) {
+		// Hosts only: a redirect location can carry anything in its path and query.
+		return fmt.Errorf("%w: %s://%s redirected to %s://%s", ErrRedirectOrigin, first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
+// agentHTTP is the client for requests to an agent when the caller supplies none.
+var agentHTTP = &http.Client{CheckRedirect: sameOriginRedirects}
+
+// withRedirectPolicy returns the client to use for a request to an agent: hc, or the default
+// when hc is nil, with sameOriginRedirects applied ahead of any redirect policy hc has itself.
+func withRedirectPolicy(hc *http.Client) *http.Client {
+	if hc == nil {
+		return agentHTTP
+	}
+	cp, own := *hc, hc.CheckRedirect
+	cp.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := sameOriginRedirects(req, via); err != nil {
+			return err
+		}
+		if own != nil {
+			return own(req, via)
+		}
+		return nil
+	}
+	return &cp
 }
 
 func getCard(ctx context.Context, cardURL, credential string) (*Card, error) {
@@ -251,7 +323,7 @@ func getCard(ctx context.Context, cardURL, credential string) (*Card, error) {
 	if credential != "" {
 		req.Header.Set("Authorization", "Bearer "+credential)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := agentHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +351,9 @@ func getCard(ctx context.Context, cardURL, credential string) (*Card, error) {
 type Client struct {
 	URL        string
 	Credential string // injected as Bearer; the caller never sees it
-	HTTP       *http.Client
+	// HTTP is the client to send with; nil takes the default. Either way a redirect is followed
+	// only within the origin of URL (see sameOriginRedirects).
+	HTTP *http.Client
 	// PollInterval / PollTimeout bound how long Send waits on a non-terminal task before
 	// handing the task back to the caller as-is. Zero values take the defaults (1s / 10m).
 	PollInterval time.Duration
@@ -449,11 +523,7 @@ func (c *Client) call(ctx context.Context, method string, params any, session st
 	if session != "" {
 		req.Header.Set(SessionHeader, session)
 	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	res, err := hc.Do(req)
+	res, err := withRedirectPolicy(c.HTTP).Do(req)
 	if err != nil {
 		return err
 	}

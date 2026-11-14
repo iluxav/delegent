@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,5 +103,83 @@ func TestManagerRoundTrip(t *testing.T) {
 	s.Disconnect()
 	if s.Connected() || s.Session() != nil {
 		t.Fatal("still connected after Disconnect")
+	}
+}
+
+// TestHTTPClient_HeadersStayOnServerOrigin: a server's configured headers reach that server,
+// follow a redirect within its origin, and are not sent to another host it redirects to.
+func TestHTTPClient_HeadersStayOnServerOrigin(t *testing.T) {
+	type seen struct{ auth, key string }
+	record := func(into *atomic.Value, r *http.Request) {
+		into.Store(seen{r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")})
+	}
+	var otherHits atomic.Int32
+	var atOther, atVendor, atVendorNew atomic.Value
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherHits.Add(1)
+		record(&atOther, r)
+	}))
+	defer other.Close()
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			record(&atVendor, r)
+			http.Redirect(w, r, other.URL+"/mcp", http.StatusTemporaryRedirect)
+		case "/old":
+			http.Redirect(w, r, "/new", http.StatusTemporaryRedirect)
+		case "/new":
+			record(&atVendorNew, r)
+		}
+	}))
+	defer vendor.Close()
+
+	client := httpClient(vendor.URL+"/mcp", map[string]string{"Authorization": "Bearer SERVER-SECRET", "X-Api-Key": "k-123"})
+	want := seen{"Bearer SERVER-SECRET", "k-123"}
+	for _, path := range []string{"/away", "/old"} {
+		res, err := client.Post(vendor.URL+path, "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("post %s: %v", path, err)
+		}
+		res.Body.Close()
+	}
+
+	if got, _ := atVendor.Load().(seen); got != want {
+		t.Errorf("the server did not receive its headers: got %+v", got)
+	}
+	if got, _ := atVendorNew.Load().(seen); got != want {
+		t.Errorf("the headers were dropped on a redirect within the server's origin: got %+v", got)
+	}
+	if otherHits.Load() == 0 {
+		t.Fatal("the redirect was not followed, so this test shows nothing about the other host")
+	}
+	if got, _ := atOther.Load().(seen); got != (seen{}) {
+		t.Errorf("the server's headers were sent to the host it redirected to: %+v", got)
+	}
+}
+
+func TestOriginOf(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"https://mcp.vendor.com/mcp", "https://mcp.vendor.com:443"},
+		{"https://MCP.Vendor.com:443/x?y=1", "https://mcp.vendor.com:443"},
+		{"http://localhost/mcp", "http://localhost:80"},
+		{"http://127.0.0.1:8090/mcp", "http://127.0.0.1:8090"},
+		{"http://[::1]:8090/mcp", "http://::1:8090"},
+		{"https://evil.vendor.com/mcp", "https://evil.vendor.com:443"},
+		{"http://mcp.vendor.com/mcp", "http://mcp.vendor.com:80"},
+		{"ftp://vendor.com/mcp", ""},
+		{"/just/a/path", ""},
+		{"https:///mcp", ""},
+		{"", ""},
+	} {
+		u, err := url.Parse(c.in)
+		if err != nil {
+			t.Fatalf("parse %q: %v", c.in, err)
+		}
+		if got := originOf(u); got != c.want {
+			t.Errorf("originOf(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if got := originOf(nil); got != "" {
+		t.Errorf("originOf(nil) = %q, want \"\"", got)
 	}
 }

@@ -37,6 +37,7 @@ import (
 	"delegent.dev/gateway/keyring"
 	"delegent.dev/gateway/loader"
 	"delegent.dev/gateway/oauth"
+	"delegent.dev/gateway/origin"
 	"delegent.dev/gateway/rootkeys"
 	"delegent.dev/gateway/secretstore"
 	"delegent.dev/gateway/store"
@@ -210,6 +211,7 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 	// Resolve the upstream credential (if the target references one) via the SecretStore and
 	// attach it to the upstream client — the agent never sees it.
 	httpClient := &http.Client{}
+	credentialTo := origin.Of(target.Endpoint) // the only origin the credential is sent to
 	if target.CredentialRef != "" {
 		secrets := secretstore.NewDB(st, sealer)
 		switch target.CredentialKind {
@@ -239,10 +241,10 @@ func New(ctx context.Context, st store.Store, sealer keyring.Sealer, target *sto
 				secrets: secrets,
 				client:  oauth.RefreshInput{TokenEndpoint: oc.TokenEndpoint, ClientID: oc.ClientID, ClientSecret: csec, HTTP: http.DefaultClient},
 			})
-			httpClient.Transport = &authTransport{src: src, base: http.DefaultTransport}
+			httpClient.Transport = &authTransport{src: src, base: http.DefaultTransport, to: credentialTo}
 		default: // "static_bearer", "" (default), and "query_param" (later task)
 			if cred, err := secrets.Get(ctx, target.CredentialRef); err == nil && cred != "" {
-				httpClient.Transport = &authTransport{src: staticSource{cred: cred}, base: http.DefaultTransport}
+				httpClient.Transport = &authTransport{src: staticSource{cred: cred}, base: http.DefaultTransport, to: credentialTo}
 			} else if err != nil {
 				log.Printf("⚠️ could not resolve credential %q: %v — connecting upstream WITHOUT it (re-add via PUT /api/targets/{id}/credential)", target.CredentialRef, err)
 			}
@@ -1712,13 +1714,22 @@ func loadConfig(ctx context.Context, st store.Store, target *store.Target) (core
 }
 
 // authTransport injects the resolved upstream credential as a Bearer header. The agent never
-// sees it — Delegent attaches it on the way out.
+// sees it — Delegent attaches it on the way out, and only to the target's own origin.
+//
+// This transport also carries the requests http.Client makes when it follows a redirect, after
+// Client has removed Authorization for a new host. A request to any other origin therefore
+// goes out without the credential, or an upstream could collect it at a host of its choosing
+// by answering with a redirect.
 type authTransport struct {
 	src  CredentialSource
 	base http.RoundTripper
+	to   origin.Origin // the target endpoint's origin; the zero value sends the credential nowhere
 }
 
 func (a *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !a.to.Has(r.URL) {
+		return a.base.RoundTrip(r)
+	}
 	tok, err := a.src.Bearer(r.Context())
 	if err != nil {
 		return nil, err

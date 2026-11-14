@@ -110,6 +110,8 @@ func newA2AUpstream(ctx context.Context, endpoint, credential string) (*a2aUpstr
 	if err != nil {
 		return nil, fmt.Errorf("fetch agent card: %w", err)
 	}
+	// FetchCard has refused any card whose URL is not on the endpoint's origin, so the credential
+	// goes to the origin the operator configured and nowhere else.
 	u := &a2aUpstream{
 		client:   &a2a.Client{URL: card.URL, Credential: credential, PollTimeout: a2aWaitFromEnv()},
 		card:     card,

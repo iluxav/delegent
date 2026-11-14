@@ -430,6 +430,10 @@ func (w *webApp) createTarget(rw http.ResponseWriter, r *http.Request) {
 	// An agent: read its card, draft its skills, no OAuth discovery (the card declares auth).
 	if kind == gateway.TargetKindA2A {
 		res, card, err := a2a.Introspect(ctx, f.Endpoint, cred)
+		if errors.Is(err, a2a.ErrCardOrigin) {
+			w.addFailed(rw, r, f, err.Error()) // the card was read; the message says what is wrong
+			return
+		}
 		if err != nil {
 			w.addFailed(rw, r, f, "could not read the agent card (is the agent up, and does it publish "+a2a.WellKnownPath+"?): "+err.Error())
 			return

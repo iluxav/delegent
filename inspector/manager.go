@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -160,9 +162,9 @@ func (s *Server) transport() (mcp.Transport, error) {
 		// Default off: the standalone SSE stream is a long-lived GET some servers answer slowly,
 		// stalling connect. Opt in per server with "standaloneSSE": true to watch server-pushed
 		// notifications.
-		return &mcp.StreamableClientTransport{Endpoint: spec.URL, HTTPClient: httpClient(spec.Headers), DisableStandaloneSSE: !spec.StandaloneSSE}, nil
+		return &mcp.StreamableClientTransport{Endpoint: spec.URL, HTTPClient: httpClient(spec.URL, spec.Headers), DisableStandaloneSSE: !spec.StandaloneSSE}, nil
 	case KindSSE:
-		return &mcp.SSEClientTransport{Endpoint: spec.URL, HTTPClient: httpClient(spec.Headers)}, nil
+		return &mcp.SSEClientTransport{Endpoint: spec.URL, HTTPClient: httpClient(spec.URL, spec.Headers)}, nil
 	}
 	return nil, fmt.Errorf("unknown transport %q", spec.Kind())
 }
@@ -331,12 +333,23 @@ func (m *Manager) Close() {
 
 // --- helpers ---
 
+// headerTransport adds a server's configured headers, usually its credential, to requests for
+// that server's own origin only.
+//
+// This transport also carries the requests http.Client makes when it follows a redirect, after
+// Client has removed Authorization for a new host. A request to any other origin therefore
+// goes out without the headers, or a server could collect them at a host of its choosing by
+// answering with a redirect.
 type headerTransport struct {
 	headers map[string]string
 	base    http.RoundTripper
+	to      string // the server's origin, from originOf; "" sends the headers nowhere
 }
 
 func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if h.to == "" || originOf(r.URL) != h.to {
+		return h.base.RoundTrip(r)
+	}
 	r = r.Clone(r.Context())
 	for k, v := range h.headers {
 		r.Header.Set(k, v)
@@ -344,11 +357,38 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return h.base.RoundTrip(r)
 }
 
-func httpClient(headers map[string]string) *http.Client {
+// httpClient returns the client for the server at endpoint, sending headers to that server.
+func httpClient(endpoint string, headers map[string]string) *http.Client {
 	if len(headers) == 0 {
 		return &http.Client{}
 	}
-	return &http.Client{Transport: headerTransport{headers: headers, base: http.DefaultTransport}}
+	u, _ := url.Parse(endpoint) // nil on error: no origin, so the headers are sent nowhere
+	return &http.Client{Transport: headerTransport{headers: headers, base: http.DefaultTransport, to: originOf(u)}}
+}
+
+// originOf returns a URL's scheme, host and port in one comparable form, with the default port
+// filled in. It returns "" unless the URL is http or https and names a host.
+func originOf(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	scheme, host, port := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	if host == "" {
+		return ""
+	}
+	switch scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	default:
+		return ""
+	}
+	return scheme + "://" + host + ":" + port
 }
 
 // lineWriter splits a stream into lines and hands each complete one to emit.

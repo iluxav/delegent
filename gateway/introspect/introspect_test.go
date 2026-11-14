@@ -1,6 +1,10 @@
 package introspect
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,5 +52,35 @@ func TestDraft_UnknownFallsToAnnotationThenClosed(t *testing.T) {
 	d2 := draft(&mcp.Tool{Name: "frobnicate"})
 	if !d2.Unknown {
 		t.Fatalf("no verb + no hint should be unknown, got %q", d2.Effect)
+	}
+}
+
+// TestIntrospect_CredentialStaysOnEndpointOrigin: an endpoint that answers with a redirect to
+// another host receives the credential; the host it redirects to does not.
+func TestIntrospect_CredentialStaysOnEndpointOrigin(t *testing.T) {
+	var otherHits atomic.Int32
+	var otherAuth, vendorAuth atomic.Value
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherHits.Add(1)
+		otherAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusBadRequest) // not an MCP server: Introspect fails after this
+	}))
+	defer other.Close()
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		vendorAuth.Store(r.Header.Get("Authorization"))
+		http.Redirect(w, r, other.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer vendor.Close()
+
+	_, _ = Introspect(context.Background(), vendor.URL+"/mcp", "VENDOR-SECRET")
+
+	if got, _ := vendorAuth.Load().(string); got != "Bearer VENDOR-SECRET" {
+		t.Fatalf("the endpoint did not receive its credential: got %q", got)
+	}
+	if otherHits.Load() == 0 {
+		t.Fatal("the redirect was not followed, so this test shows nothing about the other host")
+	}
+	if got, _ := otherAuth.Load().(string); got != "" {
+		t.Fatalf("the credential was sent to the host the endpoint redirected to: %q", got)
 	}
 }
