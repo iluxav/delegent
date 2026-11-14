@@ -79,6 +79,12 @@ delegent target add --kind a2a --id researcher --endpoint http://agents.internal
     --credential <the agent's bearer> --mint-key
 ```
 
+The card's `url` must be on the endpoint's own scheme, host and port. Every call goes to that
+URL with the agent's credential, and the agent writes the card, so delegent refuses a card
+that names another origin. `http://localhost:7103` and `http://127.0.0.1:7103` count as
+different. If the card's address is the one you trust, use it as `--endpoint`. For the same
+reason a redirect from the agent is followed only within that origin.
+
 `--mint-key` also mints the key the agent uses when it is *itself* a consumer — when it calls
 other targets through delegent. Point the agent's outbound calls at `http://host:8090/mcp`
 with that key, and have it **echo the `X-Delegent-Session` header it was called with** on
@@ -111,7 +117,6 @@ still running after `DELEGENT_A2A_WAIT` (default 25s, under most clients' tool-c
 is handed back with its id for `get_task`, and a client that re-sends the same request is
 attached to the running task rather than starting a second one. A task the agent parks on
 `input-required` likewise comes back with a `get_task` handle to resume it.
-`agents/` in the repository is a five-agent team built this way.
 
 **Questions to the operator.** Every client also gets `ask_operator`: an agent that needs a
 decision only a human can make (which account or team, an unclear requirement, whether to go
